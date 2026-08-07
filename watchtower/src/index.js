@@ -19,6 +19,7 @@
 // to protect an offline party (same risk as having no watchtower at all);
 // it can never forge a challenge or steal funds.
 
+require("dotenv").config();
 const path = require("path");
 const { ethers } = require("ethers");
 const artifacts = require("./artifacts");
@@ -29,9 +30,20 @@ const { startMonitoring, reactToChannel } = require("./monitor");
 const RPC_URL = process.env.WATCHTOWER_RPC_URL ?? "http://127.0.0.1:8545";
 const CONTRACT_ADDRESS = process.env.WATCHTOWER_CONTRACT;
 const PORT = Number(process.env.WATCHTOWER_PORT ?? 8787);
-// Anvil default account #2 — local demo only. Any funded account works;
-// the watchtower needs no special role (see challenge()'s doc comment).
-const WATCHTOWER_KEY = process.env.WATCHTOWER_PRIVATE_KEY ?? "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
+// Falls back to Anvil's well-known demo account #2 so the local demo needs
+// zero setup — any funded account works, the watchtower needs no special
+// role (see challenge()'s doc comment). Set WATCHTOWER_PRIVATE_KEY in .env
+// (see .env.example) for anything else, a real testnet in particular.
+const ANVIL_DEMO_KEY = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
+const WATCHTOWER_KEY = process.env.WATCHTOWER_PRIVATE_KEY ?? ANVIL_DEMO_KEY;
+
+if (WATCHTOWER_KEY === ANVIL_DEMO_KEY && !RPC_URL.includes("127.0.0.1") && !RPC_URL.includes("localhost")) {
+  console.error(
+    "[!] WATCHTOWER_RPC_URL points somewhere other than localhost, but no WATCHTOWER_PRIVATE_KEY is set — " +
+      "about to submit transactions using Anvil's PUBLIC well-known demo key. If this is a real network, stop " +
+      "and set WATCHTOWER_PRIVATE_KEY in .env (see .env.example) first."
+  );
+}
 
 async function main() {
   if (!CONTRACT_ADDRESS) {

@@ -1,32 +1,31 @@
 #!/usr/bin/env node
-// Deploys everything Milestone 3 needs onto the two local Anvil chains
-// (see chains/start_chain_a.sh / start_chain_b.sh):
+// Deploys PaymentChannel (+ LightClientVerifier where configured) onto
+// every chain listed in chains.config.json — local Anvil by default (see
+// chains/start_chain_a.sh / start_chain_b.sh), or any real network (e.g. a
+// public testnet) via .env — see .env.example.
 //
-//   Chain A: Groth16Verifier, PaymentChannel(channelStateVerifier, noLightClient)
-//   Chain B: Groth16Verifier, Groth16VerifierConsensus, LightClientVerifier,
-//            PaymentChannel(channelStateVerifier, lightClientVerifier)
+// For each chain:
+//   Groth16Verifier, PaymentChannel(channelStateVerifier, lightClientVerifier?)
+//   + if the chain's config sets "lightClient": true, also:
+//     Groth16VerifierConsensus, LightClientVerifier(consensusVerifier)
 //
-// Only Chain B needs a light client here — Milestone 3's demo flow relays
-// ONE direction (a channel's final state on Chain A gets attested and
-// settled on Chain B, see PLAN.md Milestone 3). Chain A's PaymentChannel is
-// deployed with lightClientVerifier = address(0) (see
-// PaymentChannel.sol's constructor doc).
+// Which chains get a light client (i.e. which chains can accept remote-
+// attested state from another chain) is a property of chains.config.json,
+// not of this script — add a chain there, decide its lightClient flag, and
+// this script deploys it correctly with zero code changes. See
+// relayer/src/chains.js.
 //
 // Writes addresses to deployment.json (gitignored) so the relayer and the
 // e2e demo script can find everything without re-deploying.
 //
 // Usage: node src/deploy.js [--out deployment.json]
 
+require("dotenv").config();
 const path = require("path");
 const fs = require("fs");
 const { ethers } = require("ethers");
 const artifacts = require("./artifacts");
-
-const CHAIN_A_RPC = process.env.CHAIN_A_RPC ?? "http://127.0.0.1:8545";
-const CHAIN_B_RPC = process.env.CHAIN_B_RPC ?? "http://127.0.0.1:8546";
-
-// Anvil's well-known default account #0 private key — local demo only.
-const DEPLOYER_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const { resolveChains } = require("./chains");
 
 async function deployContract(wallet, { abi, bytecode }, args = []) {
   const factory = new ethers.ContractFactory(abi, bytecode, wallet);
@@ -35,49 +34,57 @@ async function deployContract(wallet, { abi, bytecode }, args = []) {
   return contract;
 }
 
+/// Deploys one chain's contracts. Returns the addresses to record in
+/// deployment.json for this chain name.
+async function deployChain(name, { rpcUrl, deployerKey, lightClient }) {
+  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  // NonceManager: each chain does several sequential deploys from the same
+  // wallet, and ethers v6's default "pending"-tag nonce lookup was observed
+  // to return a stale value when queried again immediately after a prior
+  // send on the same provider instance (same issue worked around in
+  // watchtower/src/e2e_demo.js — see its comment for more detail).
+  const wallet = new ethers.NonceManager(new ethers.Wallet(deployerKey, provider));
+  const chainId = (await provider.getNetwork()).chainId;
+
+  console.error(`Deploying to ${name} (chainId=${chainId}, ${rpcUrl}) from ${await wallet.getAddress()}...`);
+
+  const channelStateVerifier = await deployContract(wallet, artifacts.Groth16Verifier());
+  console.error(`  Groth16Verifier:          ${await channelStateVerifier.getAddress()}`);
+
+  let lightClientAddress = ethers.ZeroAddress;
+  const record = { rpcUrl, chainId: chainId.toString() };
+
+  if (lightClient) {
+    const consensusVerifier = await deployContract(wallet, artifacts.Groth16VerifierConsensus());
+    const lightClientContract = await deployContract(wallet, artifacts.LightClientVerifier(), [await consensusVerifier.getAddress()]);
+    lightClientAddress = await lightClientContract.getAddress();
+    console.error(`  Groth16VerifierConsensus: ${await consensusVerifier.getAddress()}`);
+    console.error(`  LightClientVerifier:      ${lightClientAddress}`);
+    record.lightClientVerifier = lightClientAddress;
+  }
+
+  const paymentChannel = await deployContract(wallet, artifacts.PaymentChannel(), [await channelStateVerifier.getAddress(), lightClientAddress]);
+  console.error(`  PaymentChannel:           ${await paymentChannel.getAddress()}`);
+  record.paymentChannel = await paymentChannel.getAddress();
+
+  return record;
+}
+
 async function main() {
   const outArg = process.argv.includes("--out") ? process.argv[process.argv.indexOf("--out") + 1] : "deployment.json";
   const outPath = path.join(__dirname, "..", outArg);
 
-  const providerA = new ethers.JsonRpcProvider(CHAIN_A_RPC);
-  const providerB = new ethers.JsonRpcProvider(CHAIN_B_RPC);
-  const walletA = new ethers.Wallet(DEPLOYER_KEY, providerA);
-  const walletB = new ethers.Wallet(DEPLOYER_KEY, providerB);
+  const chains = resolveChains();
+  const deployment = { chains: {} };
 
-  const chainAId = (await providerA.getNetwork()).chainId;
-  const chainBId = (await providerB.getNetwork()).chainId;
+  // Sequential, not Promise.all — deploys from the same wallet on the same
+  // chain must not race (see NonceManager note above); across DIFFERENT
+  // chains it's safe to parallelize, but sequential keeps log output
+  // readable and this isn't performance-sensitive tooling.
+  for (const [name, cfg] of Object.entries(chains)) {
+    deployment.chains[name] = await deployChain(name, cfg);
+  }
 
-  console.error(`Deploying to Chain A (chainId=${chainAId}, ${CHAIN_A_RPC})...`);
-  const channelStateVerifierA = await deployContract(walletA, artifacts.Groth16Verifier());
-  const paymentChannelA = await deployContract(walletA, artifacts.PaymentChannel(), [
-    await channelStateVerifierA.getAddress(),
-    ethers.ZeroAddress,
-  ]);
-  console.error(`  Groth16Verifier:  ${await channelStateVerifierA.getAddress()}`);
-  console.error(`  PaymentChannel:   ${await paymentChannelA.getAddress()}`);
-
-  console.error(`Deploying to Chain B (chainId=${chainBId}, ${CHAIN_B_RPC})...`);
-  const channelStateVerifierB = await deployContract(walletB, artifacts.Groth16Verifier());
-  const consensusVerifierB = await deployContract(walletB, artifacts.Groth16VerifierConsensus());
-  const lightClientB = await deployContract(walletB, artifacts.LightClientVerifier(), [await consensusVerifierB.getAddress()]);
-  const paymentChannelB = await deployContract(walletB, artifacts.PaymentChannel(), [
-    await channelStateVerifierB.getAddress(),
-    await lightClientB.getAddress(),
-  ]);
-  console.error(`  Groth16Verifier:          ${await channelStateVerifierB.getAddress()}`);
-  console.error(`  Groth16VerifierConsensus: ${await consensusVerifierB.getAddress()}`);
-  console.error(`  LightClientVerifier:      ${await lightClientB.getAddress()}`);
-  console.error(`  PaymentChannel:           ${await paymentChannelB.getAddress()}`);
-
-  const deployment = {
-    chainA: { rpcUrl: CHAIN_A_RPC, chainId: chainAId.toString(), paymentChannel: await paymentChannelA.getAddress() },
-    chainB: {
-      rpcUrl: CHAIN_B_RPC,
-      chainId: chainBId.toString(),
-      paymentChannel: await paymentChannelB.getAddress(),
-      lightClientVerifier: await lightClientB.getAddress(),
-    },
-  };
   fs.writeFileSync(outPath, JSON.stringify(deployment, null, 2));
   console.error(`Wrote ${outPath}`);
   console.log(JSON.stringify(deployment));

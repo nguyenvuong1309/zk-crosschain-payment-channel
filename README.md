@@ -75,9 +75,17 @@ lệnh trong lịch sử phiên làm việc hoặc `circuits/README.md` (đang b
 cd contracts && forge build
 cd ../chains && ./start_chain_a.sh && ./start_chain_b.sh
 cd ../relayer && npm install
-npm run deploy   # deploy PaymentChannel + LightClientVerifier lên cả 2 chain
+npm run deploy   # deploy PaymentChannel + LightClientVerifier lên mọi chain trong chains.config.json
 npm run e2e      # mở kênh, settle qua Chain A, relay proof thật, settle trên Chain B, rút tiền
 ```
+
+`relayer/chains.config.json` liệt kê các chain theo tên (không giới hạn 2) —
+thêm chain thứ 3/4 (hoặc trỏ `chainA`/`chainB` sang testnet thật) chỉ cần sửa
+file này + `.env` (xem `relayer/.env.example`), không cần sửa code
+`deploy.js`/`index.js`. `deploy.js` tự deploy `LightClientVerifier` cho chain
+nào có `"lightClient": true`. `node src/index.js <channelId> [fromChain]
+[toChain]` relay giữa 2 tên chain bất kỳ trong `deployment.json` (mặc định
+`chainA` → `chainB`).
 
 Xem `chains/README.md` và `PLAN.md` Milestone 3 cho chi tiết luồng và giới
 hạn đã biết (relay 1 chiều, channelId giả định trùng giữa 2 chain).

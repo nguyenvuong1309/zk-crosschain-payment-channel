@@ -1,0 +1,19 @@
+{
+  "//": "Named chain registry — deploy.js and index.js loop over this instead of hardcoding chainA/chainB, so adding a 3rd/4th chain (or pointing an existing name at a real testnet) never requires touching relayer code, only this file + .env. Each entry's rpcEnv/deployerKeyEnv name the .env vars that override its defaults — see .env.example.",
+  "chains": {
+    "chainA": {
+      "//": "Source chain — no light client here, this demo only relays ONE direction (chainA -> chainB). See PLAN.md Milestone 3.",
+      "rpcEnv": "CHAIN_A_RPC",
+      "rpcDefault": "http://127.0.0.1:8545",
+      "deployerKeyEnv": "DEPLOYER_PRIVATE_KEY_A",
+      "lightClient": false
+    },
+    "chainB": {
+      "//": "Destination chain — gets a LightClientVerifier so it can accept remote-attested state from chainA.",
+      "rpcEnv": "CHAIN_B_RPC",
+      "rpcDefault": "http://127.0.0.1:8546",
+      "deployerKeyEnv": "DEPLOYER_PRIVATE_KEY_B",
+      "lightClient": true
+    }
+  }
+}

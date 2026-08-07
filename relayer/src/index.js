@@ -1,17 +1,24 @@
 // Relayer — Milestone 3 (see PLAN.md).
 //
 // Responsibilities:
-//   1. Read a channel's current final state from Chain A's PaymentChannel.
+//   1. Read a channel's current final state from the source chain's
+//      PaymentChannel.
 //   2. Compute the SAME domain-separated state hash
-//      PaymentChannel.closeWithRemoteAttestation checks on Chain B (see that
-//      function's doc comment) — this is the `stateRoot` the demo validator
-//      committee is asked to attest to.
+//      PaymentChannel.closeWithRemoteAttestation checks on the destination
+//      chain (see that function's doc comment) — this is the `stateRoot`
+//      the demo validator committee is asked to attest to.
 //   3. Generate a consensus_proof.circom proof (shells out to
 //      circuits/scripts/prove_and_export_consensus.sh — see that script and
 //      prove_and_export.sh for why a CLI pipeline is used instead of
 //      snarkjs's JS `groth16.fullProve` API).
-//   4. Submit { proof, publicSignals } to Chain B's LightClientVerifier,
-//      updating its `trustedStateRoot[chainA]`.
+//   4. Submit { proof, publicSignals } to the destination chain's
+//      LightClientVerifier, updating its `trustedStateRoot[sourceChainId]`.
+//
+// Source/destination are chain NAMES from chains.config.json (see
+// relayer/src/chains.js), not hardcoded chainA/chainB — this only relays
+// one direction per call, but which two chains that is comes from the CLI
+// args / deployment.json, so adding a 3rd chain never requires editing this
+// file.
 //
 // This component only affects LIVENESS (see docs/threat-model.md #7): a
 // crashed or malicious relayer delays cross-chain settlement, but the
@@ -21,6 +28,7 @@
 // signed off. See docs/threat-model.md #6 for why the validator committee
 // itself is a demo/toy one, not a stand-in for real chain security.
 
+require("dotenv").config();
 const path = require("path");
 const fs = require("fs");
 const { execFileSync } = require("child_process");
@@ -53,52 +61,65 @@ function generateConsensusProof({ chainId, blockNumber, stateRoot }) {
   return { a, b: [b0, b1], c, pubSignals };
 }
 
-/// Reads channelId's current state from Chain A, generates a consensus
-/// proof attesting to it, and submits it to Chain B's LightClientVerifier.
-/// Returns the computed stateRoot and the submission tx receipt.
-async function relayChannelState({ deployment, channelId }) {
-  const providerA = new ethers.JsonRpcProvider(deployment.chainA.rpcUrl);
-  const providerB = new ethers.JsonRpcProvider(deployment.chainB.rpcUrl);
+/// Reads channelId's current state from `fromChain`, generates a consensus
+/// proof attesting to it, and submits it to `toChain`'s LightClientVerifier.
+/// `fromChain`/`toChain` are names in `deployment.chains` (see
+/// relayer/src/chains.js + deploy.js) — `toChain` must have been deployed
+/// with a light client. Returns the computed stateRoot and the submission
+/// tx receipt.
+async function relayChannelState({ deployment, channelId, fromChain = "chainA", toChain = "chainB" }) {
+  const source = deployment.chains[fromChain];
+  const dest = deployment.chains[toChain];
+  if (!source) throw new Error(`unknown source chain "${fromChain}" — not in deployment.json's chains`);
+  if (!dest) throw new Error(`unknown destination chain "${toChain}" — not in deployment.json's chains`);
+  if (!dest.lightClientVerifier) {
+    throw new Error(`destination chain "${toChain}" has no lightClientVerifier — redeploy it with "lightClient": true in chains.config.json`);
+  }
+
+  const providerSource = new ethers.JsonRpcProvider(source.rpcUrl);
+  const providerDest = new ethers.JsonRpcProvider(dest.rpcUrl);
 
   const { abi: paymentChannelAbi } = artifacts.PaymentChannel();
   const { abi: lightClientAbi } = artifacts.LightClientVerifier();
 
-  const paymentChannelA = new ethers.Contract(deployment.chainA.paymentChannel, paymentChannelAbi, providerA);
-  const ch = await paymentChannelA.channels(channelId);
+  const paymentChannelSource = new ethers.Contract(source.paymentChannel, paymentChannelAbi, providerSource);
+  const ch = await paymentChannelSource.channels(channelId);
   // ethers v6 returns uint256 struct fields as native bigint already.
   const nonce = ch.nonce;
   const balanceA = ch.balanceA;
   const balanceB = ch.balanceB;
 
   const stateRoot = computeRemoteStateHash({
-    remoteContract: deployment.chainA.paymentChannel,
-    remoteChainId: BigInt(deployment.chainA.chainId),
+    remoteContract: source.paymentChannel,
+    remoteChainId: BigInt(source.chainId),
     channelId: BigInt(channelId),
     nonce,
     balanceA,
     balanceB,
   });
 
-  const blockNumber = BigInt(await providerA.getBlockNumber());
+  const blockNumber = BigInt(await providerSource.getBlockNumber());
 
   console.error(
-    `Relaying channel ${channelId}: nonce=${nonce} balanceA=${balanceA} balanceB=${balanceB} ` +
-      `(Chain A block ${blockNumber}) -> stateRoot=${stateRoot}`
+    `Relaying channel ${channelId} from ${fromChain} to ${toChain}: nonce=${nonce} balanceA=${balanceA} balanceB=${balanceB} ` +
+      `(${fromChain} block ${blockNumber}) -> stateRoot=${stateRoot}`
   );
 
-  const { a, b, c, pubSignals } = generateConsensusProof({ chainId: deployment.chainA.chainId, blockNumber, stateRoot });
+  const { a, b, c, pubSignals } = generateConsensusProof({ chainId: source.chainId, blockNumber, stateRoot });
 
-  // Anvil default account #1 — any funded account works, updateState() has
-  // no access control (the proof itself is what's trusted, see
-  // LightClientVerifier.sol's doc comment).
-  const relayerKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
-  const walletB = new ethers.Wallet(relayerKey, providerB);
-  const lightClient = new ethers.Contract(deployment.chainB.lightClientVerifier, lightClientAbi, walletB);
+  // Any FUNDED account works — updateState() has no access control (the
+  // proof itself is what's trusted, see LightClientVerifier.sol's doc
+  // comment). Falls back to Anvil's default account #1 for the local demo;
+  // set RELAYER_PRIVATE_KEY in .env for anything else (a real testnet in
+  // particular — see .env.example).
+  const relayerKey = process.env.RELAYER_PRIVATE_KEY ?? "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+  const walletDest = new ethers.Wallet(relayerKey, providerDest);
+  const lightClient = new ethers.Contract(dest.lightClientVerifier, lightClientAbi, walletDest);
 
   const tx = await lightClient.updateState(a, b, c, pubSignals);
   const receipt = await tx.wait();
 
-  console.error(`Submitted to Chain B LightClientVerifier: tx ${receipt.hash}`);
+  console.error(`Submitted to ${toChain}'s LightClientVerifier: tx ${receipt.hash}`);
 
   return { stateRoot, nonce, balanceA, balanceB, txHash: receipt.hash };
 }
@@ -113,12 +134,14 @@ function loadDeployment(deploymentPath) {
 async function main() {
   const deploymentPath = process.env.DEPLOYMENT_FILE ?? path.join(__dirname, "..", "deployment.json");
   const channelId = process.argv[2];
+  const fromChain = process.argv[3] ?? "chainA";
+  const toChain = process.argv[4] ?? "chainB";
   if (channelId === undefined) {
-    throw new Error("usage: node src/index.js <channelId>  (relays that channel's current state Chain A -> Chain B once)");
+    throw new Error("usage: node src/index.js <channelId> [fromChain=chainA] [toChain=chainB]  (relays that channel's current state once)");
   }
 
   const deployment = loadDeployment(deploymentPath);
-  const result = await relayChannelState({ deployment, channelId });
+  const result = await relayChannelState({ deployment, channelId, fromChain, toChain });
   console.log(
     JSON.stringify({
       ...result,

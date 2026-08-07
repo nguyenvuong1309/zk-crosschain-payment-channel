@@ -29,9 +29,10 @@ relayer/deployment.json
 # it's only meaningful against whatever local Anvil instance is running)
 watchtower/checkpoints*.json
 
-# env
+# env — but keep the .env.example templates tracked
 .env
 .env.*
+!.env.example
 
 # macOS
 .DS_Store

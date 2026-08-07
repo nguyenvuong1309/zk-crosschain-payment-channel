@@ -132,6 +132,34 @@ jobs:
         working-directory: circuits
         run: mv build/channel_state_final.zkey build/channel_state_final_v2.zkey
 
+      # run_phase2_ceremony.sh uses fresh OS entropy each run (by design —
+      # that's what makes the setup trustworthy, see the script's own
+      # comments), so it produces a DIFFERENT verifying key every time the
+      # ceremony actually runs. The Groth16Verifier*.sol committed to git
+      # were exported from whoever's local one-off ceremony produced the
+      # deployed/documented setup (see circuits/README.md) — a freshly
+      # generated zkey will NOT match that verifying key, so proofs
+      # generated against it fail when checked by the committed verifier
+      # contracts (ecpairing returns false / InvalidProof).
+      #
+      # Always re-export both verifier contracts from whatever zkey is
+      # actually in circuits/build/ right now — cheap, and needed on BOTH
+      # cache miss (freshly-ceremonied zkey) and cache hit (a zkey from
+      # some earlier CI run's ceremony, restored from cache) since neither
+      # matches the committed .sol files and only circuits/build/ is
+      # cached, not contracts/src/. This intentionally overwrites the
+      # committed files for the rest of this job only (nothing is pushed
+      # back to the repo).
+      - name: Re-export Solidity verifiers from this run's zkeys
+        working-directory: circuits
+        run: |
+          npx snarkjs zkey export solidityverifier build/channel_state_final_v2.zkey /tmp/v.sol
+          cp /tmp/v.sol ../contracts/src/Groth16Verifier.sol
+
+          npx snarkjs zkey export solidityverifier build/consensus_proof_final.zkey /tmp/vc.sol
+          sed 's/contract Groth16Verifier/contract Groth16VerifierConsensus/' /tmp/vc.sol \
+            > ../contracts/src/Groth16VerifierConsensus.sol
+
       - name: forge test --ffi
         run: forge test --ffi -vvv
         working-directory: contracts
