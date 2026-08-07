@@ -1,0 +1,13 @@
+{
+  "name": "zk-crosschain-payment-channel-watchtower",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Third-party watchtower for PaymentChannel.sol (Milestone 4) — holds checkpointed co-signed states on parties' behalf and auto-submits a rescue challenge() if it sees a stale close while a party is offline. See PLAN.md Milestone 4 and docs/threat-model.md #2.",
+  "scripts": {
+    "start": "node src/index.js",
+    "e2e": "node src/e2e_demo.js"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  }
+}

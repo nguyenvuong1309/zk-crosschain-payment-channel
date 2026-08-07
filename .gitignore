@@ -1,0 +1,41 @@
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# node
+node_modules/
+npm-debug.log*
+
+# Rust (circuits-halo2/)
+circuits-halo2/target/
+
+# circuit build artifacts (large binaries, regenerate locally)
+circuits/build/*.r1cs
+circuits/build/*.wtns
+circuits/build/*.ptau
+circuits/build/*_js/
+circuits/build/*.zkey
+circuits/build/input.json
+
+# chain logs
+chains/logs/
+
+# relayer deployment output (regenerate via `node src/deploy.js`, addresses
+# are only valid for whatever local Anvil instances are currently running)
+relayer/deployment.json
+
+# watchtower's checkpoint store (regenerate by re-running the demo/service —
+# it's only meaningful against whatever local Anvil instance is running)
+watchtower/checkpoints*.json
+
+# env
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# editor / tool caches
+.serena/
+*.log

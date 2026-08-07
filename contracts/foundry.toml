@@ -1,0 +1,37 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+# Groth16Verifier.sol (snarkjs-generated) has deep inline-assembly stacks
+# that trip the legacy codegen's "stack too deep" limit — via-ir avoids it.
+via_ir = true
+# Needed by test/ChannelStateProof.t.sol, which shells out to
+# circuits/scripts/prove_and_export.sh to generate a real Groth16 proof
+# bound to the actual deployed PaymentChannel address at test time (the
+# domain-separator fix requires this — a proof can no longer be hardcoded
+# independent of the contract's address, see docs/threat-model.md).
+ffi = true
+remappings = [
+    "openzeppelin-contracts/=lib/openzeppelin-contracts/",
+    "forge-std/=lib/forge-std/src/",
+]
+
+# Used only for Halmos symbolic testing (test/PaymentChannel.formal.t.sol,
+# Milestone 4) via `FOUNDRY_PROFILE=halmos halmos ...` — the installed
+# Halmos version (0.1.13, latest available for this machine's Python 3.9)
+# doesn't support MCOPY (EVM opcode 0x5e, introduced in Cancun), which the
+# default profile's Solc target emits. Targeting the pre-Cancun "shanghai"
+# EVM avoids it. Does NOT affect `forge test`/deployment — those still use
+# [profile.default]'s EVM target.
+[profile.halmos]
+src = "src"
+out = "out"
+libs = ["lib"]
+via_ir = true
+evm_version = "shanghai"
+remappings = [
+    "openzeppelin-contracts/=lib/openzeppelin-contracts/",
+    "forge-std/=lib/forge-std/src/",
+]
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

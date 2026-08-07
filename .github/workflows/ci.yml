@@ -1,0 +1,229 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PTAU_URL: https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_17.ptau
+  PTAU_SHA256: 6b662a324867139fb1a20a324d90b6ff61856dfb23f59326909f14b0e2483ae0
+  CIRCOM_VERSION: v2.1.9
+
+jobs:
+  # Fast checks: no circuit build needed, catch obvious breakage in seconds.
+  lint-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - name: forge fmt --check
+        run: forge fmt --check
+        working-directory: contracts
+
+      - name: forge build
+        run: forge build --sizes
+        working-directory: contracts
+
+  # Full test suite, including the FFI tests that shell out to a real
+  # Groth16 prover (ChannelStateProof.t.sol, LightClient.t.sol,
+  # KeyOwnership.t.sol) — see contracts/foundry.toml (ffi = true) and
+  # docs/threat-model.md. Needs circuits/build/*.zkey + *_js/ populated,
+  # which are gitignored (large binaries) and reproduced here, cached by
+  # circuit source hash so unchanged circuits skip the trusted-setup
+  # ceremony on subsequent runs.
+  test-ffi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: circuits/package-lock.json
+
+      - name: Cache circom compiler
+        id: cache-circom
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/circom
+          key: circom-${{ env.CIRCOM_VERSION }}-linux
+
+      - name: Install circom
+        if: steps.cache-circom.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/bin
+          curl -fsSL -o ~/.local/bin/circom \
+            "https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64"
+          chmod +x ~/.local/bin/circom
+      - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: circuits — npm ci
+        run: npm ci
+        working-directory: circuits
+
+      # Cache the whole trusted-setup output (r1cs, wasm witness
+      # calculators, final zkeys) keyed on the circuit sources + the
+      # ceremony script, so the phase-2 ceremony (3 contributions per
+      # circuit) and the 151MB phase-1 ptau download only run again when
+      # something that affects the proving key actually changes.
+      - name: Cache circuit build artifacts
+        id: cache-circuit-build
+        uses: actions/cache@v4
+        with:
+          path: |
+            circuits/build/*.r1cs
+            circuits/build/*_js
+            circuits/build/*_final*.zkey
+            circuits/build/powersOfTau28_hez_final_17.ptau
+          key: circuit-build-${{ hashFiles('circuits/circuits/**/*.circom', 'circuits/scripts/run_phase2_ceremony.sh') }}
+
+      - name: Compile circuits
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        working-directory: circuits
+        run: |
+          circom circuits/channel_state.circom --r1cs --wasm --sym -l node_modules -o build
+          circom circuits/consensus_proof.circom --r1cs --wasm --sym -l node_modules -o build
+
+      - name: Download + verify phase-1 Powers of Tau
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        working-directory: circuits
+        run: |
+          curl -fsSL -o build/powersOfTau28_hez_final_17.ptau "$PTAU_URL"
+          echo "${PTAU_SHA256}  build/powersOfTau28_hez_final_17.ptau" | sha256sum -c -
+
+      - name: Phase-2 ceremony (channel_state)
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        working-directory: circuits
+        run: bash scripts/run_phase2_ceremony.sh channel_state build/powersOfTau28_hez_final_17.ptau 3
+
+      - name: Phase-2 ceremony (consensus_proof)
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        working-directory: circuits
+        run: bash scripts/run_phase2_ceremony.sh consensus_proof build/powersOfTau28_hez_final_17.ptau 3
+
+      - name: Rename channel_state zkey to the name prove_and_export.sh expects
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        working-directory: circuits
+        run: mv build/channel_state_final.zkey build/channel_state_final_v2.zkey
+
+      - name: forge test --ffi
+        run: forge test --ffi -vvv
+        working-directory: contracts
+
+  # Halmos symbolic property tests (Milestone 4) — separate profile from
+  # forge test's default (evm_version = shanghai avoided; Halmos needs a
+  # recent-enough version for Cancun/MCOPY support, which ubuntu-latest's
+  # default `python3` — normally 3.10+ — provides via a plain `pip install`.
+  # See contracts/README.md and docs/threat-model.md's "Formal verification"
+  # section for why this is a separate toolchain from forge test.
+  formal-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install halmos
+
+      - name: forge build --build-info (needed by Halmos for AST)
+        run: forge build --build-info --extra-output storageLayout metadata
+        working-directory: contracts
+
+      - name: halmos
+        run: halmos --contract PaymentChannelFormalTest
+        working-directory: contracts
+
+  # circuits-halo2/ (Rust) — MockProver + real KZG prove/verify + bit-for-bit
+  # cross-checks against circomlibjs (see circuits-halo2/README.md).
+  halo2-reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: circuits-halo2
+
+      - name: cargo test
+        run: cargo test --release --lib
+        working-directory: circuits-halo2
+
+      - name: cargo run --bin prove_and_export (real KZG proof)
+        run: cargo run --release --bin prove_and_export
+        working-directory: circuits-halo2
+
+  # bls-validators/ — keys.json reproducibility + off-chain pairing
+  # self-check (see bls-validators/test.js). The on-chain half (precompile
+  # cross-check, LightClientVerifierBLS integration) runs in test-ffi via
+  # forge test — EIP-2537 precompiles are natively supported by Foundry's
+  # revm, no extra setup needed there.
+  bls-validators:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: bls-validators/package-lock.json
+
+      - run: npm ci
+        working-directory: bls-validators
+
+      - run: npm test
+        working-directory: bls-validators
+
+  # watchtower/ end-to-end demo (Milestone 4) — real Anvil chain, real
+  # PaymentChannel deployment, real "partyB goes offline, partyA cheats,
+  # watchtower rescues" scenario. See watchtower/README.md.
+  watchtower-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: watchtower/package-lock.json
+
+      - name: forge build
+        run: forge build
+        working-directory: contracts
+
+      - name: Start Anvil
+        run: anvil --port 8545 --chain-id 31337 &
+
+      - run: npm ci
+        working-directory: watchtower
+
+      - name: npm run e2e
+        run: npm run e2e
+        working-directory: watchtower

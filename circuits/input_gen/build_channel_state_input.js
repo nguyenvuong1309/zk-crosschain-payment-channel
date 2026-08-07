@@ -1,0 +1,86 @@
+// Shared witness-building logic for channel_state.circom, used both by the
+// standalone CLI script (generate_channel_state_input.js) and by
+// scripts/prove_and_export.js (invoked via Foundry FFI to bind a proof to a
+// specific deployed PaymentChannel address/chainid at test time).
+
+const circomlibjs = require("circomlibjs");
+
+const DEFAULT_PRIV_KEY_A = Buffer.from("0001020304050607080900010203040506070809000102030405060708aaaa", "hex");
+const DEFAULT_PRIV_KEY_B = Buffer.from("0001020304050607080900010203040506070809000102030405060708bbbb", "hex");
+
+// 4 off-chain updates: A pays B a bit more each time. Nonces need not be
+// consecutive, only strictly increasing.
+const DEFAULT_UPDATES = [
+  { nonce: 1n, balanceA: 900_000n, balanceB: 1_100_000n },
+  { nonce: 2n, balanceA: 750_000n, balanceB: 1_250_000n },
+  { nonce: 5n, balanceA: 600_000n, balanceB: 1_400_000n },
+  { nonce: 6n, balanceA: 400_000n, balanceB: 1_600_000n },
+];
+
+/// @param opts.channelId       bigint
+/// @param opts.contractAddress bigint (uint160-range) — the domain separator
+/// @param opts.chainId         bigint — the domain separator
+/// @param opts.initBalanceA/B  bigint, must equal the channel's on-chain deposits
+/// @param opts.updates         optional override of DEFAULT_UPDATES
+/// @param opts.privKeyA/B      optional override of the demo EdDSA keys
+async function buildInput(opts) {
+  const eddsa = await circomlibjs.buildEddsa();
+  const poseidon = await circomlibjs.buildPoseidon();
+  const F = poseidon.F;
+
+  const privKeyA = opts.privKeyA ?? DEFAULT_PRIV_KEY_A;
+  const privKeyB = opts.privKeyB ?? DEFAULT_PRIV_KEY_B;
+  const pubKeyA = eddsa.prv2pub(privKeyA);
+  const pubKeyB = eddsa.prv2pub(privKeyB);
+
+  const { channelId, contractAddress, chainId, initBalanceA, initBalanceB } = opts;
+  const updates = opts.updates ?? DEFAULT_UPDATES;
+  const totalDeposit = initBalanceA + initBalanceB;
+
+  for (const u of updates) {
+    if (u.balanceA + u.balanceB !== totalDeposit) {
+      throw new Error(`conservation violated at nonce ${u.nonce}`);
+    }
+  }
+
+  function signState(privKey, u) {
+    // Must mirror channel_state.circom's msgHash exactly: Poseidon(6) over
+    // (contractAddress, chainId, channelId, nonce, balanceA, balanceB).
+    const msg = poseidon([contractAddress, chainId, channelId, u.nonce, u.balanceA, u.balanceB]);
+    const sig = eddsa.signPoseidon(privKey, msg);
+    return {
+      S: sig.S.toString(),
+      R8x: F.toObject(sig.R8[0]).toString(),
+      R8y: F.toObject(sig.R8[1]).toString(),
+    };
+  }
+
+  const sigA = updates.map((u) => signState(privKeyA, u));
+  const sigB = updates.map((u) => signState(privKeyB, u));
+
+  return {
+    channelId: channelId.toString(),
+    pubKeyAx: F.toObject(pubKeyA[0]).toString(),
+    pubKeyAy: F.toObject(pubKeyA[1]).toString(),
+    pubKeyBx: F.toObject(pubKeyB[0]).toString(),
+    pubKeyBy: F.toObject(pubKeyB[1]).toString(),
+    initBalanceA: initBalanceA.toString(),
+    initBalanceB: initBalanceB.toString(),
+    contractAddress: contractAddress.toString(),
+    chainId: chainId.toString(),
+
+    nonce: updates.map((u) => u.nonce.toString()),
+    balanceA: updates.map((u) => u.balanceA.toString()),
+    balanceB: updates.map((u) => u.balanceB.toString()),
+
+    sigA_S: sigA.map((s) => s.S),
+    sigA_R8x: sigA.map((s) => s.R8x),
+    sigA_R8y: sigA.map((s) => s.R8y),
+
+    sigB_S: sigB.map((s) => s.S),
+    sigB_R8x: sigB.map((s) => s.R8x),
+    sigB_R8y: sigB.map((s) => s.R8y),
+  };
+}
+
+module.exports = { buildInput, DEFAULT_UPDATES, DEFAULT_PRIV_KEY_A, DEFAULT_PRIV_KEY_B };
