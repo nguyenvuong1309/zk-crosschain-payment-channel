@@ -4,13 +4,19 @@
   "private": true,
   "description": "Watches Chain A, generates ZK proofs of its state, submits them to Chain B's LightClientVerifier. Milestone 3 — see PLAN.md.",
   "scripts": {
-    "deploy": "node src/deploy.js",
-    "relay": "node src/index.js",
-    "e2e": "node src/e2e_demo.js"
+    "deploy": "tsx src/deploy.ts",
+    "relay": "tsx src/index.ts",
+    "e2e": "tsx src/e2e_demo.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
     "ethers": "^6.13.0",
     "snarkjs": "^0.7.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.10",
+    "typescript": "^5.7.2"
   }
 }

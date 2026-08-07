@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S npx tsx
 // End-to-end Milestone 3 demo: opens a channel on Chain A, moves it to a
 // new agreed state (closeUnilateral — funds not withdrawn yet on Chain A on
 // purpose, to show settlement on Chain B doesn't wait on Chain A's challenge
@@ -9,14 +9,14 @@
 // being completely independent EVMs.
 //
 // Prerequisites: both Anvil chains running (chains/start_chain_a.sh,
-// chains/start_chain_b.sh) and `node src/deploy.js` already run.
+// chains/start_chain_b.sh) and `npx tsx src/deploy.ts` already run.
 //
-// Usage: node src/e2e_demo.js
+// Usage: npx tsx src/e2e_demo.ts
 
-const path = require("path");
-const { ethers } = require("ethers");
-const artifacts = require("./artifacts");
-const { relayChannelState, loadDeployment } = require("./index");
+import path from "path";
+import { ethers, type Contract, type Signer } from "ethers";
+import * as artifacts from "./artifacts";
+import { relayChannelState, loadDeployment } from "./index";
 
 // Anvil's well-known default accounts #0/#1 — local demo only.
 const PARTY_A_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -25,12 +25,19 @@ const PARTY_B_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6
 const DEPOSIT_A = ethers.parseEther("1");
 const DEPOSIT_B = ethers.parseEther("1");
 
-async function signState(wallet, paymentChannel, state) {
-  const digest = await paymentChannel.hashState(state);
+interface ChannelState {
+  channelId: bigint;
+  nonce: number;
+  balanceA: bigint;
+  balanceB: bigint;
+}
+
+async function signState(wallet: Signer, paymentChannel: Contract, state: ChannelState): Promise<string> {
+  const digest: string = await paymentChannel.hashState!(state);
   return wallet.signMessage(ethers.getBytes(digest));
 }
 
-async function assertEqual(label, actual, expected) {
+async function assertEqual(label: string, actual: bigint, expected: bigint): Promise<void> {
   if (actual.toString() !== expected.toString()) {
     throw new Error(`${label}: expected ${expected}, got ${actual}`);
   }
@@ -41,8 +48,8 @@ async function main() {
   const deployment = loadDeployment(path.join(__dirname, "..", "deployment.json"));
   const { abi: paymentChannelAbi } = artifacts.PaymentChannel();
 
-  const chainA = deployment.chains.chainA;
-  const chainB = deployment.chains.chainB;
+  const chainA = deployment.chains.chainA!;
+  const chainB = deployment.chains.chainB!;
 
   const providerA = new ethers.JsonRpcProvider(chainA.rpcUrl);
   const providerB = new ethers.JsonRpcProvider(chainB.rpcUrl);
@@ -50,7 +57,7 @@ async function main() {
   // same chain, and ethers v6's default "pending"-tag nonce lookup was
   // observed to return a stale value when queried again immediately after
   // a prior send on the same provider instance (see
-  // watchtower/src/e2e_demo.js and relayer/src/deploy.js for the same fix).
+  // watchtower/src/e2e_demo.ts and relayer/src/deploy.ts for the same fix).
   const partyAOnA = new ethers.NonceManager(new ethers.Wallet(PARTY_A_KEY, providerA));
   const partyBOnA = new ethers.NonceManager(new ethers.Wallet(PARTY_B_KEY, providerA));
   const partyAOnB = new ethers.NonceManager(new ethers.Wallet(PARTY_A_KEY, providerB));
@@ -64,20 +71,20 @@ async function main() {
   const paymentChannelB = new ethers.Contract(chainB.paymentChannel, paymentChannelAbi, providerB);
 
   console.error("--- Step 1: open + join a channel on Chain A ---");
-  let tx = await paymentChannelA.connect(partyAOnA).open(partyBAddress, DEPOSIT_A, 0, 0, 0, 0, 0, { value: DEPOSIT_A });
+  let tx = await (paymentChannelA.connect(partyAOnA) as Contract).open!(partyBAddress, DEPOSIT_A, 0, 0, 0, 0, 0, { value: DEPOSIT_A });
   let receipt = await tx.wait();
-  const openedEvent = receipt.logs.map((l) => paymentChannelA.interface.parseLog(l)).find((e) => e && e.name === "ChannelOpened");
-  const channelId = openedEvent.args.channelId;
+  const openedEvent = receipt.logs.map((l: any) => paymentChannelA.interface.parseLog(l)).find((e: any) => e && e.name === "ChannelOpened");
+  const channelId: bigint = openedEvent.args.channelId;
   console.error(`  channelId = ${channelId}`);
 
-  tx = await paymentChannelA.connect(partyBOnA).join(channelId, 0, 0, 0, 0, 0, { value: DEPOSIT_B });
+  tx = await (paymentChannelA.connect(partyBOnA) as Contract).join!(channelId, 0, 0, 0, 0, 0, { value: DEPOSIT_B });
   await tx.wait();
 
   console.error("--- Step 2: move the channel to a new agreed state on Chain A (closeUnilateral) ---");
-  const state = { channelId, nonce: 1, balanceA: ethers.parseEther("0.3"), balanceB: ethers.parseEther("1.7") };
+  const state: ChannelState = { channelId, nonce: 1, balanceA: ethers.parseEther("0.3"), balanceB: ethers.parseEther("1.7") };
   const sigA = await signState(partyAOnA, paymentChannelA, state);
   const sigB = await signState(partyBOnA, paymentChannelA, state);
-  tx = await paymentChannelA.connect(partyAOnA).closeUnilateral(state, sigA, sigB);
+  tx = await (paymentChannelA.connect(partyAOnA) as Contract).closeUnilateral!(state, sigA, sigB);
   await tx.wait();
   console.error("  Chain A channel now in CHALLENGE_PERIOD with nonce=1, balanceA=0.3, balanceB=1.7 (funds NOT withdrawn yet)");
 
@@ -86,20 +93,18 @@ async function main() {
   console.error(`  Chain B now trusts stateRoot=${relayResult.stateRoot} for Chain A`);
 
   console.error("--- Step 4: open a MATCHING channel on Chain B ---");
-  tx = await paymentChannelB.connect(partyAOnB).open(partyBAddress, DEPOSIT_A, 0, 0, 0, 0, 0, { value: DEPOSIT_A });
+  tx = await (paymentChannelB.connect(partyAOnB) as Contract).open!(partyBAddress, DEPOSIT_A, 0, 0, 0, 0, 0, { value: DEPOSIT_A });
   receipt = await tx.wait();
-  const openedEventB = receipt.logs.map((l) => paymentChannelB.interface.parseLog(l)).find((e) => e && e.name === "ChannelOpened");
-  const channelIdB = openedEventB.args.channelId;
+  const openedEventB = receipt.logs.map((l: any) => paymentChannelB.interface.parseLog(l)).find((e: any) => e && e.name === "ChannelOpened");
+  const channelIdB: bigint = openedEventB.args.channelId;
   if (channelIdB.toString() !== channelId.toString()) {
     throw new Error(`channelId mismatch: Chain A=${channelId} Chain B=${channelIdB} (demo assumes matching ids)`);
   }
-  tx = await paymentChannelB.connect(partyBOnB).join(channelIdB, 0, 0, 0, 0, 0, { value: DEPOSIT_B });
+  tx = await (paymentChannelB.connect(partyBOnB) as Contract).join!(channelIdB, 0, 0, 0, 0, 0, { value: DEPOSIT_B });
   await tx.wait();
 
   console.error("--- Step 5: settle Chain B's channel via closeWithRemoteAttestation ---");
-  tx = await paymentChannelB
-    .connect(partyAOnB)
-    .closeWithRemoteAttestation(channelIdB, chainA.paymentChannel, chainA.chainId, state);
+  tx = await (paymentChannelB.connect(partyAOnB) as Contract).closeWithRemoteAttestation!(channelIdB, chainA.paymentChannel, chainA.chainId, state);
   await tx.wait();
   console.error("  Chain B channel now in CHALLENGE_PERIOD with the SAME state, via a validator-attested proof — no bridge/asset transfer");
 
@@ -115,9 +120,9 @@ async function main() {
   const balABefore = await new ethers.JsonRpcProvider(chainB.rpcUrl).getBalance(partyAAddress);
   const balBBefore = await new ethers.JsonRpcProvider(chainB.rpcUrl).getBalance(partyBAddress);
 
-  tx = await paymentChannelB.connect(partyBOnB).withdraw(channelIdB);
+  tx = await (paymentChannelB.connect(partyBOnB) as Contract).withdraw!(channelIdB);
   const withdrawReceipt = await tx.wait();
-  const gasCost = withdrawReceipt.gasUsed * withdrawReceipt.gasPrice;
+  const gasCost: bigint = BigInt(withdrawReceipt.gasUsed) * BigInt(withdrawReceipt.gasPrice);
 
   const balAAfter = await new ethers.JsonRpcProvider(chainB.rpcUrl).getBalance(partyAAddress);
   const balBAfter = await new ethers.JsonRpcProvider(chainB.rpcUrl).getBalance(partyBAddress);

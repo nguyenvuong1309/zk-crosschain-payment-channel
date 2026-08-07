@@ -21,9 +21,14 @@ contract LightClientVerifierBLSTest is Test {
         internal
         returns (bytes memory aggSig)
     {
+        // Runs bls-validators' own locally-installed tsx binary directly
+        // (rather than "npx tsx") — an ffi'd `npx` run with contracts/ as
+        // cwd wouldn't find tsx in bls-validators/node_modules and would
+        // try to fetch it from the registry instead, which is slow and
+        // fails offline.
         string[] memory cmd = new string[](6);
-        cmd[0] = "node";
-        cmd[1] = "../bls-validators/sign.js";
+        cmd[0] = "../bls-validators/node_modules/.bin/tsx";
+        cmd[1] = "../bls-validators/sign.ts";
         cmd[2] = vm.toString(chainId);
         cmd[3] = vm.toString(blockNumber);
         cmd[4] = vm.toString(stateRoot);

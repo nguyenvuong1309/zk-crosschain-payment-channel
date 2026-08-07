@@ -4,11 +4,17 @@
   "private": true,
   "description": "Third-party watchtower for PaymentChannel.sol (Milestone 4) — holds checkpointed co-signed states on parties' behalf and auto-submits a rescue challenge() if it sees a stale close while a party is offline. See PLAN.md Milestone 4 and docs/threat-model.md #2.",
   "scripts": {
-    "start": "node src/index.js",
-    "e2e": "node src/e2e_demo.js"
+    "start": "tsx src/index.ts",
+    "e2e": "tsx src/e2e_demo.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
     "ethers": "^6.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "tsx": "^4.23.10",
+    "typescript": "^5.9.3"
   }
 }

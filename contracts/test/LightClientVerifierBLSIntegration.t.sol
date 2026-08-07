@@ -37,9 +37,11 @@ contract LightClientVerifierBLSIntegrationTest is Test {
         internal
         returns (bytes memory)
     {
+        // See LightClientVerifierBLS.t.sol::_sign for why this calls
+        // bls-validators' local tsx binary directly instead of "npx tsx".
         string[] memory cmd = new string[](6);
-        cmd[0] = "node";
-        cmd[1] = "../bls-validators/sign.js";
+        cmd[0] = "../bls-validators/node_modules/.bin/tsx";
+        cmd[1] = "../bls-validators/sign.ts";
         cmd[2] = vm.toString(chainId);
         cmd[3] = vm.toString(blockNumber);
         cmd[4] = vm.toString(stateRoot);

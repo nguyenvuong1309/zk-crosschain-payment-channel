@@ -1,21 +1,25 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S npx tsx
 // Lightweight self-check (no test framework needed for 2 assertions):
-//   1. keys.json is reproducible from generate_keys.js (catches silent
+//   1. keys.json is reproducible from generate_keys.ts (catches silent
 //      drift between the committed file and the script that produces it).
-//   2. sign.js produces a signature that off-chain pairing math accepts —
+//   2. sign.ts produces a signature that off-chain pairing math accepts —
 //      the same equation LightClientVerifierBLS.sol checks on-chain via
 //      precompile (see contracts/test/BLS12381Test for the on-chain half).
 //
-// Run: node test.js
+// Run: npx tsx test.ts
 
-const assert = require("assert");
-const { execSync } = require("child_process");
-const fs = require("fs");
-const path = require("path");
-const { bls12_381 } = require("@noble/curves/bls12-381.js");
-const { signAggregate, messagePoint } = require("./sign");
+import assert from "assert";
+import { execSync } from "child_process";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { bls12_381 } from "@noble/curves/bls12-381.js";
+import { signAggregate, messagePoint } from "./sign.js";
+import keysJson from "./keys.json" with { type: "json" };
 
-function test(name, fn) {
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function test(name: string, fn: () => void): void {
   try {
     fn();
     console.log(`ok - ${name}`);
@@ -26,21 +30,21 @@ function test(name, fn) {
   }
 }
 
-test("keys.json matches generate_keys.js output", () => {
+test("keys.json matches generate_keys.ts output", () => {
   const before = fs.readFileSync(path.join(__dirname, "keys.json"), "utf8");
-  execSync("node generate_keys.js", { cwd: __dirname, stdio: "pipe" });
+  execSync("npx tsx generate_keys.ts", { cwd: __dirname, stdio: "pipe" });
   const after = fs.readFileSync(path.join(__dirname, "keys.json"), "utf8");
-  assert.strictEqual(after, before, "keys.json is out of date — run `node generate_keys.js` and commit the result");
+  assert.strictEqual(after, before, "keys.json is out of date — run `npx tsx generate_keys.ts` and commit the result");
 });
 
 test("aggregate signature from a real quorum satisfies the pairing equation", () => {
-  const keys = require("./keys.json");
+  const keys = keysJson as { validators: { pubkey: string }[] };
   const participantBitmap = 0b00111n; // validators 0,1,2
   const { aggSig } = signAggregate({ chainId: 31337n, blockNumber: 1n, stateRoot: 12345n, participantBitmap });
 
   const M = messagePoint(31337n, 1n, 12345n);
-  const aggPubkey = [0, 1, 2].reduce((acc, i) => {
-    const pub = pubkeyFromEip2537(keys.validators[i].pubkey);
+  const aggPubkey = [0, 1, 2].reduce((acc: any, i) => {
+    const pub = pubkeyFromEip2537(keys.validators[i]!.pubkey);
     return acc === null ? pub : acc.add(pub);
   }, null);
 
@@ -53,11 +57,11 @@ test("aggregate signature from a real quorum satisfies the pairing equation", ()
 test("a signature from the wrong quorum fails the pairing equation", () => {
   const { aggSig } = signAggregate({ chainId: 31337n, blockNumber: 1n, stateRoot: 12345n, participantBitmap: 0b00011n }); // only 0,1
 
-  const keys = require("./keys.json");
+  const keys = keysJson as { validators: { pubkey: string }[] };
   const M = messagePoint(31337n, 1n, 12345n);
   // Claim validators 0,1,2 (aggPubkey includes 2, who never signed).
-  const aggPubkey = [0, 1, 2].reduce((acc, i) => {
-    const pub = pubkeyFromEip2537(keys.validators[i].pubkey);
+  const aggPubkey = [0, 1, 2].reduce((acc: any, i) => {
+    const pub = pubkeyFromEip2537(keys.validators[i]!.pubkey);
     return acc === null ? pub : acc.add(pub);
   }, null);
 
@@ -69,7 +73,7 @@ test("a signature from the wrong quorum fails the pairing equation", () => {
 
 /// Parses an EIP-2537-encoded G1 point (0x + 128-byte hex: x then y, each
 /// 64-byte zero-padded) into a noble Point via fromAffine.
-function pubkeyFromEip2537(hex) {
+function pubkeyFromEip2537(hex: string) {
   const h = hex.slice(2);
   const x = BigInt("0x" + h.slice(0, 128));
   const y = BigInt("0x" + h.slice(128, 256));
@@ -77,7 +81,7 @@ function pubkeyFromEip2537(hex) {
 }
 
 /// Same, for a G2 point (0x + 256-byte hex: x.c0, x.c1, y.c0, y.c1).
-function sigFromEip2537(hex) {
+function sigFromEip2537(hex: string) {
   const h = hex.slice(2);
   const xc0 = BigInt("0x" + h.slice(0, 128));
   const xc1 = BigInt("0x" + h.slice(128, 256));

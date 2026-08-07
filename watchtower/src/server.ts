@@ -11,10 +11,12 @@
 //
 //   GET /health -> 200 "ok"
 
-const http = require("http");
-const { submitCheckpoint, InvalidCheckpointError } = require("./checkpoint");
+import http from "http";
+import type { Contract } from "ethers";
+import { submitCheckpoint, InvalidCheckpointError } from "./checkpoint";
+import type { CheckpointStore } from "./store";
 
-function readBody(req) {
+function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = "";
     req.on("data", (chunk) => (data += chunk));
@@ -23,7 +25,7 @@ function readBody(req) {
   });
 }
 
-function createServer({ paymentChannel, store }) {
+export function createServer({ paymentChannel, store }: { paymentChannel: Contract; store: CheckpointStore }): http.Server {
   return http.createServer(async (req, res) => {
     try {
       if (req.method === "GET" && req.url === "/health") {
@@ -32,8 +34,8 @@ function createServer({ paymentChannel, store }) {
         return;
       }
 
-      if (req.method === "GET" && req.url.startsWith("/checkpoint/")) {
-        const channelId = req.url.split("/")[2];
+      if (req.method === "GET" && req.url?.startsWith("/checkpoint/")) {
+        const channelId = req.url.split("/")[2]!;
         const paymentChannelAddress = await paymentChannel.getAddress();
         const checkpoint = store.getLatest(paymentChannelAddress, channelId);
         if (!checkpoint) {
@@ -66,9 +68,7 @@ function createServer({ paymentChannel, store }) {
     } catch (err) {
       const status = err instanceof InvalidCheckpointError ? 400 : 500;
       res.writeHead(status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: err.message }));
+      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
     }
   });
 }
-
-module.exports = { createServer };

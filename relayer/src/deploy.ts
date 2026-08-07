@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S npx tsx
 // Deploys PaymentChannel (+ LightClientVerifier where configured) onto
 // every chain listed in chains.config.json — local Anvil by default (see
 // chains/start_chain_a.sh / start_chain_b.sh), or any real network (e.g. a
@@ -13,36 +13,47 @@
 // attested state from another chain) is a property of chains.config.json,
 // not of this script — add a chain there, decide its lightClient flag, and
 // this script deploys it correctly with zero code changes. See
-// relayer/src/chains.js.
+// relayer/src/chains.ts.
 //
 // Writes addresses to deployment.json (gitignored) so the relayer and the
 // e2e demo script can find everything without re-deploying.
 //
-// Usage: node src/deploy.js [--out deployment.json]
+// Usage: npx tsx src/deploy.ts [--out deployment.json]
 
-require("dotenv").config();
-const path = require("path");
-const fs = require("fs");
-const { ethers } = require("ethers");
-const artifacts = require("./artifacts");
-const { resolveChains } = require("./chains");
+import "dotenv/config";
+import path from "path";
+import fs from "fs";
+import { ethers, type BigNumberish } from "ethers";
+import * as artifacts from "./artifacts";
+import { resolveChains, type ResolvedChain } from "./chains";
 
-async function deployContract(wallet, { abi, bytecode }, args = []) {
+async function deployContract(wallet: ethers.Signer, { abi, bytecode }: artifacts.Artifact, args: unknown[] = []) {
   const factory = new ethers.ContractFactory(abi, bytecode, wallet);
   const contract = await factory.deploy(...args);
   await contract.waitForDeployment();
   return contract;
 }
 
+export interface ChainDeployment {
+  rpcUrl: string;
+  chainId: string;
+  paymentChannel: string;
+  lightClientVerifier?: string;
+}
+
+export interface Deployment {
+  chains: Record<string, ChainDeployment>;
+}
+
 /// Deploys one chain's contracts. Returns the addresses to record in
 /// deployment.json for this chain name.
-async function deployChain(name, { rpcUrl, deployerKey, lightClient }) {
+async function deployChain(name: string, { rpcUrl, deployerKey, lightClient }: ResolvedChain): Promise<ChainDeployment> {
   const provider = new ethers.JsonRpcProvider(rpcUrl);
   // NonceManager: each chain does several sequential deploys from the same
   // wallet, and ethers v6's default "pending"-tag nonce lookup was observed
   // to return a stale value when queried again immediately after a prior
   // send on the same provider instance (same issue worked around in
-  // watchtower/src/e2e_demo.js — see its comment for more detail).
+  // watchtower/src/e2e_demo.ts — see its comment for more detail).
   const wallet = new ethers.NonceManager(new ethers.Wallet(deployerKey, provider));
   const chainId = (await provider.getNetwork()).chainId;
 
@@ -51,8 +62,8 @@ async function deployChain(name, { rpcUrl, deployerKey, lightClient }) {
   const channelStateVerifier = await deployContract(wallet, artifacts.Groth16Verifier());
   console.error(`  Groth16Verifier:          ${await channelStateVerifier.getAddress()}`);
 
-  let lightClientAddress = ethers.ZeroAddress;
-  const record = { rpcUrl, chainId: chainId.toString() };
+  let lightClientAddress: string = ethers.ZeroAddress;
+  const record: ChainDeployment = { rpcUrl, chainId: chainId.toString(), paymentChannel: "" };
 
   if (lightClient) {
     const consensusVerifier = await deployContract(wallet, artifacts.Groth16VerifierConsensus());
@@ -63,7 +74,10 @@ async function deployChain(name, { rpcUrl, deployerKey, lightClient }) {
     record.lightClientVerifier = lightClientAddress;
   }
 
-  const paymentChannel = await deployContract(wallet, artifacts.PaymentChannel(), [await channelStateVerifier.getAddress(), lightClientAddress]);
+  const paymentChannel = await deployContract(wallet, artifacts.PaymentChannel(), [
+    await channelStateVerifier.getAddress(),
+    lightClientAddress as BigNumberish as string,
+  ]);
   console.error(`  PaymentChannel:           ${await paymentChannel.getAddress()}`);
   record.paymentChannel = await paymentChannel.getAddress();
 
@@ -72,10 +86,10 @@ async function deployChain(name, { rpcUrl, deployerKey, lightClient }) {
 
 async function main() {
   const outArg = process.argv.includes("--out") ? process.argv[process.argv.indexOf("--out") + 1] : "deployment.json";
-  const outPath = path.join(__dirname, "..", outArg);
+  const outPath = path.join(__dirname, "..", outArg!);
 
   const chains = resolveChains();
-  const deployment = { chains: {} };
+  const deployment: Deployment = { chains: {} };
 
   // Sequential, not Promise.all — deploys from the same wallet on the same
   // chain must not race (see NonceManager note above); across DIFFERENT

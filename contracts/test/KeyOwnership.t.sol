@@ -31,9 +31,11 @@ contract KeyOwnershipTest is Test {
         internal
         returns (uint256 r8x, uint256 r8y, uint256 s)
     {
+        // Runs circuits/'s own locally-installed tsx binary directly (see
+        // LightClientVerifierBLS.t.sol::_sign for why not "npx tsx").
         string[] memory cmd = new string[](7);
-        cmd[0] = "node";
-        cmd[1] = "../circuits/scripts/sign_key_ownership.js";
+        cmd[0] = "../circuits/node_modules/.bin/tsx";
+        cmd[1] = "../circuits/scripts/sign_key_ownership.ts";
         cmd[2] = who;
         cmd[3] = vm.toString(address(channel));
         cmd[4] = vm.toString(block.chainid);

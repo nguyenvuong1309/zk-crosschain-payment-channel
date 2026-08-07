@@ -20,16 +20,16 @@ Sau khi cả 2 chain chạy:
 
 ```bash
 cd contracts && forge build   # nếu chưa build
-cd ../relayer && npm install  # nếu chưa cài
-npm run deploy                 # ghi ra relayer/deployment.json
+cd ../relayer && pnpm install  # nếu chưa cài (cài cả pnpm workspace)
+pnpm run deploy                 # ghi ra relayer/deployment.json
 ```
 
-Script (`relayer/src/deploy.js`) deploy `PaymentChannel.sol` lên MỖI chain
+Script (`relayer/src/deploy.ts`) deploy `PaymentChannel.sol` lên MỖI chain
 riêng biệt (2 địa chỉ khác nhau), và thêm `LightClientVerifier.sol` +
 `Groth16VerifierConsensus.sol` trên Chain B — luồng demo hiện tại chỉ relay
 1 chiều (trạng thái channel trên Chain A được validator-attest và settle
 trên Chain B), nên chỉ Chain B cần light client. Xem
-`relayer/src/e2e_demo.js` (`npm run e2e`) cho kịch bản đầy đủ: mở kênh, đưa
+`relayer/src/e2e_demo.ts` (`pnpm run e2e`) cho kịch bản đầy đủ: mở kênh, đưa
 kênh sang state mới trên Chain A, relay bằng proof Groth16 thật, mở kênh
 khớp trên Chain B, settle qua `closeWithRemoteAttestation`, rút tiền.
 

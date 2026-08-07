@@ -2,16 +2,23 @@
   "name": "bls-validators",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "sign.ts",
   "scripts": {
-    "test": "node test.js"
+    "test": "tsx test.ts",
+    "generate-keys": "tsx generate_keys.ts",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
     "@noble/curves": "^2.3.0",
     "ethers": "^6.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "tsx": "^4.23.10",
+    "typescript": "^5.9.3"
   }
 }

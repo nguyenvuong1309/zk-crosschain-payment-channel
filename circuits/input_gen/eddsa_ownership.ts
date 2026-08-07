@@ -12,38 +12,54 @@
 // modexp precompile. See contracts/src/BabyJubJub.sol and
 // PaymentChannel.sol::_verifyKeyOwnership for the on-chain half.
 
-const circomlibjs = require("circomlibjs");
-const { Scalar } = require("ffjavascript");
-const createBlakeHash = require("blake-hash");
+import * as circomlibjs from "circomlibjs";
+import { Scalar } from "ffjavascript";
+import createBlakeHash from "blake-hash";
 // ethers v5 is what's actually installed here (transitively, via snarkjs) —
 // v5's API lives under `ethers.utils`, unlike v6's flat exports.
-const { utils: ethersUtils } = require("ethers");
+import { utils as ethersUtils } from "ethers";
 const { defaultAbiCoder, keccak256, hexZeroPad, hexlify, concat } = ethersUtils;
 
 const SUB_ORDER = 2736030358979909402780800718157159386076813972158567259200215660948447373041n;
 
-function pruneBuffer(buff) {
-  buff[0] &= 0xf8;
-  buff[31] &= 0x7f;
-  buff[31] |= 0x40;
+function pruneBuffer(buff: Buffer): Buffer {
+  buff[0]! &= 0xf8;
+  buff[31]! &= 0x7f;
+  buff[31]! |= 0x40;
   return buff;
 }
 
 // Derives the same scalar circomlibjs's `eddsa.prv2pub` uses internally, so
 // the public key here is exactly the one registered/used for off-chain
 // signing (see circomlibjs's src/eddsa.js `prv2pub`).
-function privToScalar(privKey) {
+function privToScalar(privKey: Buffer): bigint {
   const sBuff = pruneBuffer(createBlakeHash("blake512").update(Buffer.from(privKey)).digest());
   const s = Scalar.fromRprLE(sBuff, 0, 32);
   return BigInt(Scalar.shr(s, 3).toString());
 }
 
-function abiEncode(types, values) {
+function abiEncode(types: string[], values: unknown[]): string {
   return defaultAbiCoder.encode(types, values);
 }
 
-function toBytes32(x) {
+function toBytes32(x: bigint): string {
   return hexZeroPad(hexlify(x), 32);
+}
+
+export interface SignKeyOwnershipOptions {
+  privKey: Buffer;
+  contractAddress: string;
+  chainId: bigint;
+  channelId: bigint;
+  party: string;
+}
+
+export interface KeyOwnershipSignature {
+  pubKeyX: bigint;
+  pubKeyY: bigint;
+  R8x: bigint;
+  R8y: bigint;
+  S: bigint;
 }
 
 /// @param opts.privKey         Buffer — same raw EdDSA private key seed passed to circomlibjs
@@ -53,7 +69,7 @@ function toBytes32(x) {
 ///                             WILL assign (== current `nextChannelId`); for `join()`,
 ///                             the existing channel's id
 /// @param opts.party           address of msg.sender (the party registering this key)
-async function signKeyOwnership(opts) {
+export async function signKeyOwnership(opts: SignKeyOwnershipOptions): Promise<KeyOwnershipSignature> {
   const eddsa = await circomlibjs.buildEddsa();
   const F = eddsa.F;
   const { privKey, contractAddress, chainId, channelId, party } = opts;
@@ -94,4 +110,4 @@ async function signKeyOwnership(opts) {
   return { pubKeyX, pubKeyY, R8x, R8y, S };
 }
 
-module.exports = { signKeyOwnership, privToScalar, SUB_ORDER };
+export { privToScalar, SUB_ORDER };

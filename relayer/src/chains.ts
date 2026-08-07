@@ -6,8 +6,8 @@
 // network, or repointing an existing name at a real testnet) by editing
 // chains.config.json + .env only.
 
-const fs = require("fs");
-const path = require("path");
+import fs from "fs";
+import path from "path";
 
 const CONFIG_PATH = path.join(__dirname, "..", "chains.config.json");
 
@@ -15,18 +15,37 @@ const CONFIG_PATH = path.join(__dirname, "..", "chains.config.json");
 // for a local Anvil instance (anyone can derive it, it's public). Chains
 // pointed at anything else must set their deployerKeyEnv in .env; see the
 // warning in resolveChains() below.
-const ANVIL_DEMO_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+export const ANVIL_DEMO_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
-function isLocalhost(rpcUrl) {
+export interface ChainConfigEntry {
+  "//"?: string;
+  rpcEnv: string;
+  rpcDefault: string;
+  deployerKeyEnv: string;
+  lightClient: boolean;
+}
+
+interface ChainsConfigFile {
+  "//"?: string;
+  chains: Record<string, ChainConfigEntry>;
+}
+
+export interface ResolvedChain {
+  rpcUrl: string;
+  deployerKey: string;
+  lightClient: boolean;
+}
+
+export function isLocalhost(rpcUrl: string): boolean {
   return rpcUrl.includes("127.0.0.1") || rpcUrl.includes("localhost");
 }
 
 /// Reads chains.config.json and resolves each entry's rpcUrl/deployerKey
 /// from its configured env vars (falling back to rpcDefault / the Anvil
 /// demo key). Returns { <name>: { rpcUrl, deployerKey, lightClient } }.
-function resolveChains(configPath = CONFIG_PATH) {
-  const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  const resolved = {};
+export function resolveChains(configPath: string = CONFIG_PATH): Record<string, ResolvedChain> {
+  const raw: ChainsConfigFile = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const resolved: Record<string, ResolvedChain> = {};
 
   for (const [name, cfg] of Object.entries(raw.chains)) {
     const rpcUrl = process.env[cfg.rpcEnv] ?? cfg.rpcDefault;
@@ -45,5 +64,3 @@ function resolveChains(configPath = CONFIG_PATH) {
 
   return resolved;
 }
-
-module.exports = { resolveChains, ANVIL_DEMO_KEY, isLocalhost, CONFIG_PATH };

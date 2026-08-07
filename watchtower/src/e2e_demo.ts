@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S npx tsx
 // End-to-end watchtower demo: deploys a PaymentChannel on a local Anvil
 // chain, has partyA and partyB agree on TWO off-chain states, checkpoints
 // BOTH with the watchtower (as a real client would after every signed
@@ -11,13 +11,14 @@
 // Prerequisites: an Anvil chain running on 127.0.0.1:8545 (plain `anvil`,
 // or chains/start_chain_a.sh) and `forge build` already run in contracts/.
 //
-// Usage: node src/e2e_demo.js
+// Usage: npx tsx src/e2e_demo.ts
 
-const { ethers } = require("ethers");
-const artifacts = require("./artifacts");
-const { CheckpointStore } = require("./store");
-const { submitCheckpoint } = require("./checkpoint");
-const { reactToChannel } = require("./monitor");
+import path from "path";
+import { ethers, type Contract, type Signer } from "ethers";
+import * as artifacts from "./artifacts";
+import { CheckpointStore } from "./store";
+import { submitCheckpoint, type ChannelStateInput } from "./checkpoint";
+import { reactToChannel } from "./monitor";
 
 const RPC_URL = process.env.WATCHTOWER_RPC_URL ?? "http://127.0.0.1:8545";
 
@@ -29,12 +30,12 @@ const WATCHTOWER_KEY = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a8
 const DEPOSIT_A = ethers.parseEther("1");
 const DEPOSIT_B = ethers.parseEther("1");
 
-async function signState(wallet, paymentChannel, state) {
-  const digest = await paymentChannel.hashState(state);
+async function signState(wallet: Signer, paymentChannel: Contract, state: ChannelStateInput): Promise<string> {
+  const digest: string = await paymentChannel.hashState!(state);
   return wallet.signMessage(ethers.getBytes(digest));
 }
 
-async function assertEqual(label, actual, expected) {
+async function assertEqual(label: string, actual: bigint, expected: bigint): Promise<void> {
   if (actual.toString() !== expected.toString()) {
     throw new Error(`${label}: expected ${expected}, got ${actual}`);
   }
@@ -69,50 +70,51 @@ async function main() {
   const verifier = await (await verifierFactory.deploy()).waitForDeployment();
 
   const pcFactory = new ethers.ContractFactory(pcAbi, pcBytecode, deployerWallet);
-  const paymentChannel = await (await pcFactory.deploy(await verifier.getAddress(), ethers.ZeroAddress)).waitForDeployment();
+  const paymentChannel = (await (await pcFactory.deploy(await verifier.getAddress(), ethers.ZeroAddress)).waitForDeployment()) as Contract;
   console.error(`  PaymentChannel deployed at ${await paymentChannel.getAddress()}`);
 
-  const store = new CheckpointStore(require("path").join(__dirname, "..", "checkpoints.demo.json"));
-  const onAction = (info) => console.error(`  [watchtower] channel ${info.channelId}: ${info.action}${info.reason ? ` (${info.reason})` : ""}`);
+  const store = new CheckpointStore(path.join(__dirname, "..", "checkpoints.demo.json"));
+  const onAction = (info: { channelId: unknown; action: string; reason?: string }) =>
+    console.error(`  [watchtower] channel ${info.channelId}: ${info.action}${info.reason ? ` (${info.reason})` : ""}`);
 
   console.error("--- Step 1: open + join a channel ---");
-  let tx = await paymentChannel.connect(partyAWallet).open(partyBAddress, DEPOSIT_A, 0, 0, 0, 0, 0, { value: DEPOSIT_A });
+  let tx = await (paymentChannel.connect(partyAWallet) as Contract).open!(partyBAddress, DEPOSIT_A, 0, 0, 0, 0, 0, { value: DEPOSIT_A });
   let receipt = await tx.wait();
-  const openedEvent = receipt.logs.map((l) => paymentChannel.interface.parseLog(l)).find((e) => e && e.name === "ChannelOpened");
-  const channelId = openedEvent.args.channelId;
+  const openedEvent = receipt.logs.map((l: any) => paymentChannel.interface.parseLog(l)).find((e: any) => e && e.name === "ChannelOpened");
+  const channelId: bigint = openedEvent.args.channelId;
   console.error(`  channelId = ${channelId}`);
 
-  tx = await paymentChannel.connect(partyBWallet).join(channelId, 0, 0, 0, 0, 0, { value: DEPOSIT_B });
+  tx = await (paymentChannel.connect(partyBWallet) as Contract).join!(channelId, 0, 0, 0, 0, 0, { value: DEPOSIT_B });
   await tx.wait();
 
   console.error("--- Step 2: two off-chain rounds, BOTH checkpointed with the watchtower ---");
-  const round1 = { channelId, nonce: 1, balanceA: ethers.parseEther("0.7"), balanceB: ethers.parseEther("1.3") };
+  const round1: ChannelStateInput = { channelId, nonce: 1, balanceA: ethers.parseEther("0.7"), balanceB: ethers.parseEther("1.3") };
   const round1SigA = await signState(partyAWallet, paymentChannel, round1);
   const round1SigB = await signState(partyBWallet, paymentChannel, round1);
   await submitCheckpoint({ paymentChannel, store, state: round1 }, round1SigA, round1SigB);
   console.error("  round 1 (nonce=1, 0.7/1.3) checkpointed");
 
-  const round2 = { channelId, nonce: 2, balanceA: ethers.parseEther("0.2"), balanceB: ethers.parseEther("1.8") };
+  const round2: ChannelStateInput = { channelId, nonce: 2, balanceA: ethers.parseEther("0.2"), balanceB: ethers.parseEther("1.8") };
   const round2SigA = await signState(partyAWallet, paymentChannel, round2);
   const round2SigB = await signState(partyBWallet, paymentChannel, round2);
   await submitCheckpoint({ paymentChannel, store, state: round2 }, round2SigA, round2SigB);
   console.error("  round 2 (nonce=2, 0.2/1.8) checkpointed — this is the TRUE latest state");
 
   console.error("--- Step 3: partyB goes offline. partyA cheats: closes with the STALE round-1 state ---");
-  tx = await paymentChannel.connect(partyAWallet).closeUnilateral(round1, round1SigA, round1SigB);
+  tx = await (paymentChannel.connect(partyAWallet) as Contract).closeUnilateral!(round1, round1SigA, round1SigB);
   const closeReceipt = await tx.wait();
   console.error(`  closeUnilateral(nonce=1) submitted, tx ${closeReceipt.hash} — partyB never sees this, never responds`);
 
   console.error("--- Step 4: watchtower reacts (no help from partyB) ---");
-  // In production this fires from the event listener (see monitor.js
+  // In production this fires from the event listener (see monitor.ts
   // startMonitoring) within one polling interval; called directly here so
   // the demo doesn't need to sleep an arbitrary amount waiting for it.
-  await reactToChannel({ paymentChannel, wallet: watchtowerWallet, store, channelId, onAction });
+  await reactToChannel({ paymentChannel, wallet: watchtowerWallet as unknown as ethers.Wallet, store, channelId, onAction });
 
-  const chAfterChallenge = await paymentChannel.channels(channelId);
+  const chAfterChallenge = await paymentChannel.channels!(channelId);
   await assertEqual("on-chain nonce after watchtower's rescue challenge", chAfterChallenge.nonce, 2n);
-  await assertEqual("on-chain balanceA after rescue", chAfterChallenge.balanceA, round2.balanceA);
-  await assertEqual("on-chain balanceB after rescue", chAfterChallenge.balanceB, round2.balanceB);
+  await assertEqual("on-chain balanceA after rescue", chAfterChallenge.balanceA, round2.balanceA as bigint);
+  await assertEqual("on-chain balanceB after rescue", chAfterChallenge.balanceB, round2.balanceB as bigint);
 
   console.error("--- Step 5: wait out the challenge window and withdraw ---");
   await provider.send("evm_increaseTime", [24 * 60 * 60 + 1]);
@@ -128,16 +130,16 @@ async function main() {
   // partyB is "offline" so a neutral relayer... but withdraw() is
   // onlyParty; use partyA (the cheat attempt failed, but partyA still gets
   // their honest share back — this call doesn't require B).
-  tx = await paymentChannel.connect(partyAWallet).withdraw(channelId);
+  tx = await (paymentChannel.connect(partyAWallet) as Contract).withdraw!(channelId);
   const withdrawReceipt = await tx.wait();
-  const gasCost = withdrawReceipt.gasUsed * withdrawReceipt.gasPrice;
+  const gasCost: bigint = BigInt(withdrawReceipt.gasUsed) * BigInt(withdrawReceipt.gasPrice);
 
   const balAAfter = await new ethers.JsonRpcProvider(RPC_URL).getBalance(partyAAddress);
   const balBAfter = await new ethers.JsonRpcProvider(RPC_URL).getBalance(partyBAddress);
 
   console.error("--- Verifying final payout matches the RESCUED state, not the fraudulent one ---");
-  await assertEqual("partyA payout (net of its own withdraw() gas)", balAAfter - balABefore + gasCost, round2.balanceA);
-  await assertEqual("partyB payout (received while completely offline)", balBAfter - balBBefore, round2.balanceB);
+  await assertEqual("partyA payout (net of its own withdraw() gas)", balAAfter - balABefore + gasCost, round2.balanceA as bigint);
+  await assertEqual("partyB payout (received while completely offline)", balBAfter - balBBefore, round2.balanceB as bigint);
 
   console.error("\nWatchtower demo succeeded: partyA's stale closeUnilateral(nonce=1, 0.7/1.3) was overridden");
   console.error("by the watchtower's automatic challenge(nonce=2, 0.2/1.8) — partyB got the correct 1.8 ETH");

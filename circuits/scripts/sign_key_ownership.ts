@@ -1,21 +1,23 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S npx tsx
 // Prints a JSON key-ownership signature for one of this demo's two known
-// EdDSA private keys (DEFAULT_PRIV_KEY_A/B, see input_gen/build_channel_state_input.js),
+// EdDSA private keys (DEFAULT_PRIV_KEY_A/B, see input_gen/build_channel_state_input.ts),
 // bound to a specific PaymentChannel deployment/channel/party. Invoked via
 // Foundry's `vm.ffi` from contracts/test/ChannelStateProof.t.sol so the
 // signature always matches whatever address Forge actually deployed the
 // contract at (same reasoning as prove_and_export.sh's domain binding).
 //
-// Usage: sign_key_ownership.js <A|B> <contractAddress> <chainId> <channelId> <partyAddress>
+// Usage: sign_key_ownership.ts <A|B> <contractAddress> <chainId> <channelId> <partyAddress>
 
-const path = require("path");
-const { signKeyOwnership } = require(path.join(__dirname, "..", "input_gen", "eddsa_ownership"));
-const { DEFAULT_PRIV_KEY_A, DEFAULT_PRIV_KEY_B } = require(path.join(__dirname, "..", "input_gen", "build_channel_state_input"));
+import { signKeyOwnership } from "../input_gen/eddsa_ownership";
+import { DEFAULT_PRIV_KEY_A, DEFAULT_PRIV_KEY_B } from "../input_gen/build_channel_state_input";
 
 async function main() {
   const [, , who, contractAddress, chainId, channelId, party] = process.argv;
   const privKey = who === "A" ? DEFAULT_PRIV_KEY_A : who === "B" ? DEFAULT_PRIV_KEY_B : null;
   if (!privKey) throw new Error(`unknown party label ${JSON.stringify(who)}, expected "A" or "B"`);
+  if (!contractAddress || !chainId || !channelId || !party) {
+    throw new Error("usage: sign_key_ownership.ts <A|B> <contractAddress> <chainId> <channelId> <partyAddress>");
+  }
 
   const sig = await signKeyOwnership({
     privKey,

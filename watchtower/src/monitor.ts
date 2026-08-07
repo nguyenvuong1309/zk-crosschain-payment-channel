@@ -9,7 +9,22 @@
 // authorized by the two signatures it was checkpointed with, never by
 // holding either party's key.
 
-const PaymentChannelStatus = { UNINITIALIZED: 0, ACTIVE: 1, CHALLENGE_PERIOD: 2, CLOSED: 3 };
+import type { Contract, Wallet, ContractTransactionReceipt } from "ethers";
+import type { CheckpointStore } from "./store";
+
+export const PaymentChannelStatus = { UNINITIALIZED: 0, ACTIVE: 1, CHALLENGE_PERIOD: 2, CLOSED: 3 } as const;
+
+export interface ActionInfo {
+  channelId: string | bigint | number;
+  action: "skip" | "challenging" | "challenged" | "error";
+  reason?: string;
+  onChainNonce?: string;
+  checkpointNonce?: string;
+  txHash?: string;
+  error?: string;
+}
+
+export type OnAction = (info: ActionInfo) => void;
 
 /// @param opts.paymentChannel ethers.Contract, READ instance (provider-connected)
 /// @param opts.wallet         ethers.Wallet — funded account the watchtower
@@ -19,17 +34,30 @@ const PaymentChannelStatus = { UNINITIALIZED: 0, ACTIVE: 1, CHALLENGE_PERIOD: 2,
 /// @param opts.onAction       optional callback(info) for logging/testing,
 ///                            called whenever the watchtower submits (or
 ///                            decides not to submit) a rescue challenge
-async function reactToChannel({ paymentChannel, wallet, store, channelId, onAction }) {
+export async function reactToChannel({
+  paymentChannel,
+  wallet,
+  store,
+  channelId,
+  onAction,
+}: {
+  paymentChannel: Contract;
+  wallet: Wallet;
+  store: CheckpointStore;
+  channelId: string | bigint | number;
+  onAction?: OnAction;
+}): Promise<ContractTransactionReceipt | undefined> {
   const paymentChannelAddress = await paymentChannel.getAddress();
-  const ch = await paymentChannel.channels(channelId);
+  const ch = await paymentChannel.channels!(channelId);
 
   if (Number(ch.status) !== PaymentChannelStatus.CHALLENGE_PERIOD) {
     onAction?.({ channelId, action: "skip", reason: `status is ${ch.status}, not CHALLENGE_PERIOD` });
     return;
   }
 
-  const latestBlock = await paymentChannel.runner.provider.getBlock("latest");
-  if (BigInt(latestBlock.timestamp) >= ch.challengeExpiry) {
+  const provider = paymentChannel.runner!.provider!;
+  const latestBlock = await provider.getBlock("latest");
+  if (BigInt(latestBlock!.timestamp) >= ch.challengeExpiry) {
     onAction?.({ channelId, action: "skip", reason: "challenge window already closed" });
     return;
   }
@@ -52,8 +80,8 @@ async function reactToChannel({ paymentChannel, wallet, store, channelId, onActi
     checkpointNonce: checkpoint.state.nonce.toString(),
   });
 
-  const tx = await paymentChannel.connect(wallet).challenge(checkpoint.state, checkpoint.sigA, checkpoint.sigB);
-  const receipt = await tx.wait();
+  const tx = await (paymentChannel.connect(wallet) as Contract).challenge!(checkpoint.state, checkpoint.sigA, checkpoint.sigB);
+  const receipt: ContractTransactionReceipt = await tx.wait();
 
   onAction?.({ channelId, action: "challenged", txHash: receipt.hash });
   return receipt;
@@ -61,15 +89,25 @@ async function reactToChannel({ paymentChannel, wallet, store, channelId, onActi
 
 /// Subscribes to the two events that can leave a channel in a disputable
 /// state and reacts to each. Returns a function to stop listening.
-function startMonitoring({ paymentChannel, wallet, store, onAction }) {
-  const handler = (channelId) => {
-    reactToChannel({ paymentChannel, wallet, store, channelId, onAction }).catch((err) => {
+export function startMonitoring({
+  paymentChannel,
+  wallet,
+  store,
+  onAction,
+}: {
+  paymentChannel: Contract;
+  wallet: Wallet;
+  store: CheckpointStore;
+  onAction?: OnAction;
+}): () => void {
+  const handler = (channelId: string | bigint | number) => {
+    reactToChannel({ paymentChannel, wallet, store, channelId, onAction }).catch((err: Error) => {
       onAction?.({ channelId, action: "error", error: err.message });
     });
   };
 
-  const onClosedUnilaterally = (channelId) => handler(channelId);
-  const onChallenged = (channelId) => handler(channelId);
+  const onClosedUnilaterally = (channelId: string | bigint | number) => handler(channelId);
+  const onChallenged = (channelId: string | bigint | number) => handler(channelId);
 
   paymentChannel.on("ChannelClosedUnilaterally", onClosedUnilaterally);
   paymentChannel.on("ChannelChallenged", onChallenged);
@@ -79,5 +117,3 @@ function startMonitoring({ paymentChannel, wallet, store, onAction }) {
     paymentChannel.off("ChannelChallenged", onChallenged);
   };
 }
-
-module.exports = { startMonitoring, reactToChannel, PaymentChannelStatus };

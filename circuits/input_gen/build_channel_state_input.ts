@@ -1,21 +1,38 @@
 // Shared witness-building logic for channel_state.circom, used both by the
-// standalone CLI script (generate_channel_state_input.js) and by
-// scripts/prove_and_export.js (invoked via Foundry FFI to bind a proof to a
+// standalone CLI script (generate_channel_state_input.ts) and by
+// scripts/build_ffi_input.ts (invoked via Foundry FFI to bind a proof to a
 // specific deployed PaymentChannel address/chainid at test time).
 
-const circomlibjs = require("circomlibjs");
+import * as circomlibjs from "circomlibjs";
 
-const DEFAULT_PRIV_KEY_A = Buffer.from("0001020304050607080900010203040506070809000102030405060708aaaa", "hex");
-const DEFAULT_PRIV_KEY_B = Buffer.from("0001020304050607080900010203040506070809000102030405060708bbbb", "hex");
+export const DEFAULT_PRIV_KEY_A = Buffer.from("0001020304050607080900010203040506070809000102030405060708aaaa", "hex");
+export const DEFAULT_PRIV_KEY_B = Buffer.from("0001020304050607080900010203040506070809000102030405060708bbbb", "hex");
+
+export interface Update {
+  nonce: bigint;
+  balanceA: bigint;
+  balanceB: bigint;
+}
 
 // 4 off-chain updates: A pays B a bit more each time. Nonces need not be
 // consecutive, only strictly increasing.
-const DEFAULT_UPDATES = [
+export const DEFAULT_UPDATES: Update[] = [
   { nonce: 1n, balanceA: 900_000n, balanceB: 1_100_000n },
   { nonce: 2n, balanceA: 750_000n, balanceB: 1_250_000n },
   { nonce: 5n, balanceA: 600_000n, balanceB: 1_400_000n },
   { nonce: 6n, balanceA: 400_000n, balanceB: 1_600_000n },
 ];
+
+export interface BuildChannelStateInputOptions {
+  channelId: bigint;
+  contractAddress: bigint;
+  chainId: bigint;
+  initBalanceA: bigint;
+  initBalanceB: bigint;
+  updates?: Update[];
+  privKeyA?: Buffer;
+  privKeyB?: Buffer;
+}
 
 /// @param opts.channelId       bigint
 /// @param opts.contractAddress bigint (uint160-range) — the domain separator
@@ -23,7 +40,7 @@ const DEFAULT_UPDATES = [
 /// @param opts.initBalanceA/B  bigint, must equal the channel's on-chain deposits
 /// @param opts.updates         optional override of DEFAULT_UPDATES
 /// @param opts.privKeyA/B      optional override of the demo EdDSA keys
-async function buildInput(opts) {
+export async function buildInput(opts: BuildChannelStateInputOptions) {
   const eddsa = await circomlibjs.buildEddsa();
   const poseidon = await circomlibjs.buildPoseidon();
   const F = poseidon.F;
@@ -43,7 +60,7 @@ async function buildInput(opts) {
     }
   }
 
-  function signState(privKey, u) {
+  function signState(privKey: Buffer, u: Update) {
     // Must mirror channel_state.circom's msgHash exactly: Poseidon(6) over
     // (contractAddress, chainId, channelId, nonce, balanceA, balanceB).
     const msg = poseidon([contractAddress, chainId, channelId, u.nonce, u.balanceA, u.balanceB]);
@@ -82,5 +99,3 @@ async function buildInput(opts) {
     sigB_R8y: sigB.map((s) => s.R8y),
   };
 }
-
-module.exports = { buildInput, DEFAULT_UPDATES, DEFAULT_PRIV_KEY_A, DEFAULT_PRIV_KEY_B };

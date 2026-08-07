@@ -15,7 +15,7 @@
 //      LightClientVerifier, updating its `trustedStateRoot[sourceChainId]`.
 //
 // Source/destination are chain NAMES from chains.config.json (see
-// relayer/src/chains.js), not hardcoded chainA/chainB — this only relays
+// relayer/src/chains.ts), not hardcoded chainA/chainB — this only relays
 // one direction per call, but which two chains that is comes from the CLI
 // args / deployment.json, so adding a 3rd chain never requires editing this
 // file.
@@ -28,12 +28,13 @@
 // signed off. See docs/threat-model.md #6 for why the validator committee
 // itself is a demo/toy one, not a stand-in for real chain security.
 
-require("dotenv").config();
-const path = require("path");
-const fs = require("fs");
-const { execFileSync } = require("child_process");
-const { ethers } = require("ethers");
-const artifacts = require("./artifacts");
+import "dotenv/config";
+import path from "path";
+import fs from "fs";
+import { execFileSync } from "child_process";
+import { ethers } from "ethers";
+import * as artifacts from "./artifacts";
+import type { Deployment } from "./deploy";
 
 const CIRCUITS_SCRIPT = path.join(__dirname, "..", "..", "circuits", "scripts", "prove_and_export_consensus.sh");
 
@@ -43,7 +44,21 @@ const FIELD_Q = 2188824287183927522224640574525727508854836440041603434369820418
 
 /// Mirrors PaymentChannel.sol::closeWithRemoteAttestation's
 /// `remoteStateHash` computation exactly — see its doc comment.
-function computeRemoteStateHash({ remoteContract, remoteChainId, channelId, nonce, balanceA, balanceB }) {
+export function computeRemoteStateHash({
+  remoteContract,
+  remoteChainId,
+  channelId,
+  nonce,
+  balanceA,
+  balanceB,
+}: {
+  remoteContract: string;
+  remoteChainId: bigint;
+  channelId: bigint;
+  nonce: bigint;
+  balanceA: bigint;
+  balanceB: bigint;
+}): bigint {
   const encoded = ethers.AbiCoder.defaultAbiCoder().encode(
     ["address", "uint256", "uint256", "uint256", "uint256", "uint256"],
     [remoteContract, remoteChainId, channelId, nonce, balanceA, balanceB]
@@ -52,22 +67,48 @@ function computeRemoteStateHash({ remoteContract, remoteChainId, channelId, nonc
   return hash % FIELD_Q;
 }
 
-function generateConsensusProof({ chainId, blockNumber, stateRoot }) {
+interface ConsensusProofOutput {
+  a: [string, string];
+  b0: [string, string];
+  b1: [string, string];
+  c: [string, string];
+  pubSignals: string[];
+}
+
+export function generateConsensusProof({ chainId, blockNumber, stateRoot }: { chainId: string; blockNumber: bigint; stateRoot: bigint }) {
   const raw = execFileSync("bash", [CIRCUITS_SCRIPT, chainId.toString(), blockNumber.toString(), stateRoot.toString()], {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
   });
-  const { a, b0, b1, c, pubSignals } = JSON.parse(raw);
-  return { a, b: [b0, b1], c, pubSignals };
+  const { a, b0, b1, c, pubSignals }: ConsensusProofOutput = JSON.parse(raw);
+  return { a, b: [b0, b1] as [[string, string], [string, string]], c, pubSignals };
+}
+
+export interface RelayResult {
+  stateRoot: bigint;
+  nonce: bigint;
+  balanceA: bigint;
+  balanceB: bigint;
+  txHash: string;
 }
 
 /// Reads channelId's current state from `fromChain`, generates a consensus
 /// proof attesting to it, and submits it to `toChain`'s LightClientVerifier.
 /// `fromChain`/`toChain` are names in `deployment.chains` (see
-/// relayer/src/chains.js + deploy.js) — `toChain` must have been deployed
+/// relayer/src/chains.ts + deploy.ts) — `toChain` must have been deployed
 /// with a light client. Returns the computed stateRoot and the submission
 /// tx receipt.
-async function relayChannelState({ deployment, channelId, fromChain = "chainA", toChain = "chainB" }) {
+export async function relayChannelState({
+  deployment,
+  channelId,
+  fromChain = "chainA",
+  toChain = "chainB",
+}: {
+  deployment: Deployment;
+  channelId: string;
+  fromChain?: string;
+  toChain?: string;
+}): Promise<RelayResult> {
   const source = deployment.chains[fromChain];
   const dest = deployment.chains[toChain];
   if (!source) throw new Error(`unknown source chain "${fromChain}" — not in deployment.json's chains`);
@@ -83,11 +124,11 @@ async function relayChannelState({ deployment, channelId, fromChain = "chainA", 
   const { abi: lightClientAbi } = artifacts.LightClientVerifier();
 
   const paymentChannelSource = new ethers.Contract(source.paymentChannel, paymentChannelAbi, providerSource);
-  const ch = await paymentChannelSource.channels(channelId);
+  const ch = await paymentChannelSource.channels!(channelId);
   // ethers v6 returns uint256 struct fields as native bigint already.
-  const nonce = ch.nonce;
-  const balanceA = ch.balanceA;
-  const balanceB = ch.balanceB;
+  const nonce: bigint = ch.nonce;
+  const balanceA: bigint = ch.balanceA;
+  const balanceB: bigint = ch.balanceB;
 
   const stateRoot = computeRemoteStateHash({
     remoteContract: source.paymentChannel,
@@ -116,7 +157,7 @@ async function relayChannelState({ deployment, channelId, fromChain = "chainA", 
   const walletDest = new ethers.Wallet(relayerKey, providerDest);
   const lightClient = new ethers.Contract(dest.lightClientVerifier, lightClientAbi, walletDest);
 
-  const tx = await lightClient.updateState(a, b, c, pubSignals);
+  const tx = await lightClient.updateState!(a, b, c, pubSignals);
   const receipt = await tx.wait();
 
   console.error(`Submitted to ${toChain}'s LightClientVerifier: tx ${receipt.hash}`);
@@ -124,9 +165,9 @@ async function relayChannelState({ deployment, channelId, fromChain = "chainA", 
   return { stateRoot, nonce, balanceA, balanceB, txHash: receipt.hash };
 }
 
-function loadDeployment(deploymentPath) {
+export function loadDeployment(deploymentPath: string): Deployment {
   if (!fs.existsSync(deploymentPath)) {
-    throw new Error(`no deployment file at ${deploymentPath} — run "node src/deploy.js" first`);
+    throw new Error(`no deployment file at ${deploymentPath} — run "node src/deploy.ts" first`);
   }
   return JSON.parse(fs.readFileSync(deploymentPath, "utf8"));
 }
@@ -137,7 +178,7 @@ async function main() {
   const fromChain = process.argv[3] ?? "chainA";
   const toChain = process.argv[4] ?? "chainB";
   if (channelId === undefined) {
-    throw new Error("usage: node src/index.js <channelId> [fromChain=chainA] [toChain=chainB]  (relays that channel's current state once)");
+    throw new Error("usage: npx tsx src/index.ts <channelId> [fromChain=chainA] [toChain=chainB]  (relays that channel's current state once)");
   }
 
   const deployment = loadDeployment(deploymentPath);
@@ -159,5 +200,3 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-
-module.exports = { relayChannelState, computeRemoteStateHash, generateConsensusProof, loadDeployment };

@@ -16,9 +16,9 @@ pairing check thật) — không phải danh tính/quy mô committee.
 ## Đã verify thật (không chỉ mô tả)
 
 ```bash
-cd bls-validators && npm install
-node generate_keys.js          # sinh 5 khoá demo (đã tự kiểm tra độ dài + scalar hợp lệ)
-node sign.js 31337 1 12345 7   # ký aggregate cho validator 0,1,2 (bitmap=7)
+cd bls-validators && pnpm install
+pnpm run generate-keys                  # sinh 5 khoá demo (đã tự kiểm tra độ dài + scalar hợp lệ)
+npx tsx sign.ts 31337 1 12345 7         # ký aggregate cho validator 0,1,2 (bitmap=7)
 ```
 
 ```bash
@@ -45,7 +45,7 @@ forge test --match-contract "BLS12381Test|LightClientVerifierBLS"
 - Signature: **G2** (256 byte).
 - Message → điểm G2: `_hashToG2(chainId, blockNumber, stateRoot)` trong
   `LightClientVerifierBLS.sol` — derive 2 phần tử Fp2 qua keccak256, map
-  sang G2 qua precompile `0x11`. `sign.js` tính **CHÍNH XÁC cùng công thức**
+  sang G2 qua precompile `0x11`. `sign.ts` tính **CHÍNH XÁC cùng công thức**
   off-chain (dùng `@noble/curves`'s `G2.mapToCurve` — đã xác nhận khớp bit
   precompile) để ký.
 - Aggregate: cộng điểm G1 (pubkey) và G2 (signature) của các validator
@@ -64,5 +64,5 @@ forge test --match-contract "BLS12381Test|LightClientVerifierBLS"
 - 5 khoá cố định, công khai trong repo — **tuyệt đối không dùng giữ tài sản
   thật**.
 - Không có slashing (giống hạn chế đã ghi ở #8 trong threat-model).
-- `keys.json`/`sign.js` không phải infra sản xuất — không có key rotation,
+- `keys.json`/`sign.ts` không phải infra sản xuất — không có key rotation,
   không có HSM, chỉ dùng để demo.

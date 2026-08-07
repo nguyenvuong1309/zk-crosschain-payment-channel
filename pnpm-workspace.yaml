@@ -1,0 +1,12 @@
+packages:
+  - relayer
+  - watchtower
+  - bls-validators
+  - circuits
+allowBuilds:
+  blake-hash: true
+  esbuild: true
+minimumReleaseAgeExclude:
+  - '@noble/curves@2.3.0'
+  - '@noble/hashes@2.3.0'
+  - tsx@4.23.10

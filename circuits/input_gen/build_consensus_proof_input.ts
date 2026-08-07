@@ -1,19 +1,19 @@
 // Shared witness-building logic for consensus_proof.circom — mirrors
-// build_channel_state_input.js's shape/conventions. Used by both the
-// standalone CLI script and scripts/prove_and_export_consensus.sh (invoked
+// build_channel_state_input.ts's shape/conventions. Used by both the
+// standalone CLI script and scripts/build_ffi_input_consensus.ts (invoked
 // via Foundry/relayer FFI to bind a proof to a specific chainId/blockNumber/
 // stateRoot at call time).
 
-const circomlibjs = require("circomlibjs");
+import * as circomlibjs from "circomlibjs";
 
-const NUM_VALIDATORS = 5;
-const THRESHOLD = 3;
+export const NUM_VALIDATORS = 5;
+export const THRESHOLD = 3;
 
 // 5 demo validator private keys — NOT a real consensus committee, see
 // docs/threat-model.md #6. Deterministic/fixed (same pattern as
-// build_channel_state_input.js's DEFAULT_PRIV_KEY_A/B) so
+// build_channel_state_input.ts's DEFAULT_PRIV_KEY_A/B) so
 // LightClientVerifier.sol can hardcode the corresponding public keys.
-const DEMO_VALIDATOR_PRIV_KEYS = [
+export const DEMO_VALIDATOR_PRIV_KEYS: Buffer[] = [
   Buffer.from("0001020304050607080900010203040506070809000102030405060708c001", "hex"),
   Buffer.from("0001020304050607080900010203040506070809000102030405060708c002", "hex"),
   Buffer.from("0001020304050607080900010203040506070809000102030405060708c003", "hex"),
@@ -21,11 +21,18 @@ const DEMO_VALIDATOR_PRIV_KEYS = [
   Buffer.from("0001020304050607080900010203040506070809000102030405060708c005", "hex"),
 ];
 
+export interface BuildConsensusProofInputOptions {
+  chainId: bigint;
+  blockNumber: bigint;
+  stateRoot: bigint;
+  participating?: bigint[];
+}
+
 /// @param opts.chainId       bigint — the chain being attested to
 /// @param opts.blockNumber   bigint — monotonic, prevents replay of stale attestations
 /// @param opts.stateRoot     bigint — the value being attested (e.g. a channel's final-state hash)
-/// @param opts.participating optional bool[NUM_VALIDATORS] override (default: first THRESHOLD sign)
-async function buildInput(opts) {
+/// @param opts.participating optional bigint[NUM_VALIDATORS] (0n/1n) override (default: first THRESHOLD sign)
+export async function buildInput(opts: BuildConsensusProofInputOptions) {
   const eddsa = await circomlibjs.buildEddsa();
   const poseidon = await circomlibjs.buildPoseidon();
   const F = poseidon.F;
@@ -36,12 +43,12 @@ async function buildInput(opts) {
   const pubKeys = DEMO_VALIDATOR_PRIV_KEYS.map((prv) => eddsa.prv2pub(prv));
   const msg = poseidon([chainId, blockNumber, stateRoot]);
 
-  const sigS = [];
-  const sigR8x = [];
-  const sigR8y = [];
+  const sigS: string[] = [];
+  const sigR8x: string[] = [];
+  const sigR8y: string[] = [];
   for (let i = 0; i < NUM_VALIDATORS; i++) {
     if (participating[i]) {
-      const sig = eddsa.signPoseidon(DEMO_VALIDATOR_PRIV_KEYS[i], msg);
+      const sig = eddsa.signPoseidon(DEMO_VALIDATOR_PRIV_KEYS[i]!, msg);
       sigS.push(sig.S.toString());
       sigR8x.push(F.toObject(sig.R8[0]).toString());
       sigR8y.push(F.toObject(sig.R8[1]).toString());
@@ -66,5 +73,3 @@ async function buildInput(opts) {
     sigR8y,
   };
 }
-
-module.exports = { buildInput, NUM_VALIDATORS, THRESHOLD, DEMO_VALIDATOR_PRIV_KEYS };

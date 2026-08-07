@@ -1,12 +1,12 @@
-#!/usr/bin/env node
-// Thin CLI wrapper around build_channel_state_input.js for prove_and_export.sh.
-// Usage: node build_ffi_input.js <contractAddress> <chainId> <channelId>
-const { buildInput } = require("../input_gen/build_channel_state_input");
+#!/usr/bin/env -S npx tsx
+// Thin CLI wrapper around build_channel_state_input.ts for prove_and_export.sh.
+// Usage: npx tsx build_ffi_input.ts <contractAddress> <chainId> <channelId>
+import { buildInput } from "../input_gen/build_channel_state_input";
 
 async function main() {
   const [, , contractAddressArg, chainIdArg, channelIdArg] = process.argv;
   if (!contractAddressArg || !chainIdArg || !channelIdArg) {
-    throw new Error("usage: build_ffi_input.js <contractAddress> <chainId> <channelId>");
+    throw new Error("usage: build_ffi_input.ts <contractAddress> <chainId> <channelId>");
   }
 
   const input = await buildInput({

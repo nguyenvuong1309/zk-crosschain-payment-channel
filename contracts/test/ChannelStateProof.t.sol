@@ -45,7 +45,7 @@ contract ChannelStateProofTest is Test {
         vm.deal(partyB, 10 ether);
     }
 
-    /// @dev Shells out to circuits/scripts/sign_key_ownership.js (via `vm.ffi`)
+    /// @dev Shells out to circuits/scripts/sign_key_ownership.ts (via `vm.ffi`)
     ///      for a real Schnorr key-ownership signature over the demo's known
     ///      EdDSA private key A or B, bound to `channel`'s actual deployed
     ///      address/chainid/channelId/party — required by open()/join() now
@@ -54,14 +54,16 @@ contract ChannelStateProofTest is Test {
         internal
         returns (uint256 r8x, uint256 r8y, uint256 s)
     {
+        // Runs circuits/'s own locally-installed tsx binary directly (see
+        // LightClientVerifierBLS.t.sol::_sign for why not "npx tsx").
         string[] memory cmd = new string[](6);
-        cmd[0] = "node";
-        cmd[1] = "../circuits/scripts/sign_key_ownership.js";
+        cmd[0] = "../circuits/node_modules/.bin/tsx";
+        cmd[1] = "../circuits/scripts/sign_key_ownership.ts";
         cmd[2] = who;
         cmd[3] = vm.toString(address(channel));
         cmd[4] = vm.toString(block.chainid);
         cmd[5] = vm.toString(channelId);
-        // sign_key_ownership.js's 5th positional arg is the party address;
+        // sign_key_ownership.ts's 5th positional arg is the party address;
         // vm.ffi has no fixed-length limit, so just size the array for it.
         string[] memory cmdWithParty = new string[](7);
         for (uint256 i = 0; i < 6; i++) {

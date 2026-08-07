@@ -9,23 +9,41 @@
 // stored. A malicious submitter gains nothing by sending a fake/unsigned
 // state: it simply gets rejected.
 
-const { ethers } = require("ethers");
+import { ethers, type Contract } from "ethers";
+import type { CheckpointStore, Checkpoint } from "./store";
 
-class InvalidCheckpointError extends Error {}
+export class InvalidCheckpointError extends Error {}
+
+export interface ChannelStateInput {
+  channelId: string | bigint | number;
+  nonce: string | bigint | number;
+  balanceA: string | bigint | number;
+  balanceB: string | bigint | number;
+}
 
 /// @param opts.paymentChannel ethers.Contract (read-only is fine) for the
 ///                            PaymentChannel this checkpoint is for
 /// @param opts.state          { channelId, nonce, balanceA, balanceB }
 /// @param opts.sigA/sigB      hex signature strings
-async function verifyCheckpoint({ paymentChannel, state, sigA, sigB }) {
-  const ch = await paymentChannel.channels(state.channelId);
+export async function verifyCheckpoint({
+  paymentChannel,
+  state,
+  sigA,
+  sigB,
+}: {
+  paymentChannel: Contract;
+  state: ChannelStateInput;
+  sigA: string;
+  sigB: string;
+}): Promise<Checkpoint> {
+  const ch = await paymentChannel.channels!(state.channelId);
   if (ch.partyA === ethers.ZeroAddress) {
     throw new InvalidCheckpointError(`channel ${state.channelId} does not exist`);
   }
 
   // Mirrors PaymentChannel.sol::_verifyBothSignatures exactly — same digest
   // (hashState, domain-separated), same personal-sign recovery.
-  const digest = await paymentChannel.hashState(state);
+  const digest: string = await paymentChannel.hashState!(state);
   const recoveredA = ethers.verifyMessage(ethers.getBytes(digest), sigA);
   const recoveredB = ethers.verifyMessage(ethers.getBytes(digest), sigB);
 
@@ -51,13 +69,20 @@ async function verifyCheckpoint({ paymentChannel, state, sigA, sigB }) {
   return { state: normalizedState, sigA, sigB, verifiedAt: new Date().toISOString() };
 }
 
+export interface SubmitCheckpointResult {
+  stored: boolean;
+  reason?: string;
+}
+
 /// Verifies a checkpoint and stores it if valid AND newer than whatever's
-/// already stored. Returns { stored: boolean, reason?: string }.
-async function submitCheckpoint({ paymentChannel, store, state }, sigA, sigB) {
+/// already stored.
+export async function submitCheckpoint(
+  { paymentChannel, store, state }: { paymentChannel: Contract; store: CheckpointStore; state: ChannelStateInput },
+  sigA: string,
+  sigB: string
+): Promise<SubmitCheckpointResult> {
   const checkpoint = await verifyCheckpoint({ paymentChannel, state, sigA, sigB });
   const paymentChannelAddress = await paymentChannel.getAddress();
   const stored = store.putIfNewer(paymentChannelAddress, state.channelId, checkpoint);
   return { stored, reason: stored ? undefined : "not newer than an already-stored checkpoint" };
 }
-
-module.exports = { verifyCheckpoint, submitCheckpoint, InvalidCheckpointError };

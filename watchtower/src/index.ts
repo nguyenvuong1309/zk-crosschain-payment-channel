@@ -1,11 +1,12 @@
+#!/usr/bin/env -S npx tsx
 // Watchtower — Milestone 4 (see PLAN.md, docs/threat-model.md #2).
 //
 // A third party that:
 //   1. Accepts checkpointed (signature-verified) copies of the latest
 //      mutually co-signed ChannelState for channels it's asked to watch
-//      (POST /checkpoint — see server.js).
+//      (POST /checkpoint — see server.ts).
 //   2. Watches PaymentChannel for `ChannelClosedUnilaterally` /
-//      `ChannelChallenged` events (see monitor.js).
+//      `ChannelChallenged` events (see monitor.ts).
 //   3. If the resulting on-chain state is staler than what it has
 //      checkpointed, automatically submits the correct newer state via
 //      `challenge()` — protecting whichever party is offline, without ever
@@ -19,13 +20,13 @@
 // to protect an offline party (same risk as having no watchtower at all);
 // it can never forge a challenge or steal funds.
 
-require("dotenv").config();
-const path = require("path");
-const { ethers } = require("ethers");
-const artifacts = require("./artifacts");
-const { CheckpointStore } = require("./store");
-const { createServer } = require("./server");
-const { startMonitoring, reactToChannel } = require("./monitor");
+import "dotenv/config";
+import path from "path";
+import { ethers } from "ethers";
+import * as artifacts from "./artifacts";
+import { CheckpointStore } from "./store";
+import { createServer } from "./server";
+import { startMonitoring, reactToChannel, type OnAction } from "./monitor";
 
 const RPC_URL = process.env.WATCHTOWER_RPC_URL ?? "http://127.0.0.1:8545";
 const CONTRACT_ADDRESS = process.env.WATCHTOWER_CONTRACT;
@@ -57,7 +58,7 @@ async function main() {
 
   const store = new CheckpointStore(process.env.WATCHTOWER_STORE_PATH ?? path.join(__dirname, "..", "checkpoints.json"));
 
-  const onAction = (info) => console.error(`[watchtower] channel ${info.channelId}: ${info.action}${info.reason ? ` (${info.reason})` : ""}`);
+  const onAction: OnAction = (info) => console.error(`[watchtower] channel ${info.channelId}: ${info.action}${info.reason ? ` (${info.reason})` : ""}`);
 
   const server = createServer({ paymentChannel, store });
   server.listen(PORT, () => console.error(`[watchtower] checkpoint API listening on :${PORT}`));
@@ -73,4 +74,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { reactToChannel };
+export { reactToChannel };

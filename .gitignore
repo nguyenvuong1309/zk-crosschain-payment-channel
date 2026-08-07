@@ -6,6 +6,9 @@ contracts/broadcast/
 # node
 node_modules/
 npm-debug.log*
+# tsc output — every package runs its .ts sources directly via tsx, dist/
+# only appears if `tsc` (not `tsc --noEmit`) is run manually.
+dist/
 
 # Rust (circuits-halo2/)
 circuits-halo2/target/
@@ -21,7 +24,7 @@ circuits/build/input.json
 # chain logs
 chains/logs/
 
-# relayer deployment output (regenerate via `node src/deploy.js`, addresses
+# relayer deployment output (regenerate via `pnpm run deploy`, addresses
 # are only valid for whatever local Anvil instances are currently running)
 relayer/deployment.json
 

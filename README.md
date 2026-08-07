@@ -12,7 +12,7 @@ cho giả định tin cậy và giới hạn của demo — đọc trước khi 
 |---|---|---|
 | M1 | Payment channel 1 chain (raw signature) | ✅ Xong — `contracts/` |
 | M2 | ZK circuit + settle qua Groth16Verifier trên PaymentChannel, domain-separated (chống replay xuyên deployment) | ✅ Xong — `circuits/`, `contracts/src/Groth16Verifier.sol`. **Lưu ý**: ZK proof đắt hơn raw-signature close cho kênh 2 bên — xem PLAN.md M2 để hiểu giá trị thật của ZK ở đây không phải tiết kiệm gas. Test cần `forge test --ffi`. |
-| M3 | Cross-chain qua ZK light client (thu nhỏ) | ✅ Xong — `circuits/circuits/consensus_proof.circom`, `contracts/src/LightClientVerifier.sol`, `relayer/`. Đã chạy end-to-end thật trên 2 Anvil (`relayer/src/e2e_demo.js`). |
+| M3 | Cross-chain qua ZK light client (thu nhỏ) | ✅ Xong — `circuits/circuits/consensus_proof.circom`, `contracts/src/LightClientVerifier.sol`, `relayer/`. Đã chạy end-to-end thật trên 2 Anvil (`relayer/src/e2e_demo.ts`). |
 | M4 | Hoá cứng hướng production | 🔶 Phần lớn xong — xem bảng chi tiết bên dưới |
 
 **M4 — chi tiết**:
@@ -57,11 +57,15 @@ git submodule update --init --recursive
 # Contracts
 cd contracts && forge test -vv   # foundry.toml đã bật ffi=true, cần cho test proof ZK thật
 
+# relayer/, watchtower/, bls-validators/, circuits/ là 1 pnpm workspace
+# (xem pnpm-workspace.yaml) — 1 lệnh cài hết cả 4 (tất cả code TypeScript,
+# chạy trực tiếp qua tsx, không cần build step riêng).
+pnpm install
+
 # Circuit: compile, sinh input mẫu, tạo witness
 cd circuits
-npm install
-npm run build:channel_state
-npm run gen:input > build/input.json
+pnpm run build:channel_state
+pnpm run gen:input > build/input.json
 node build/channel_state_js/generate_witness.js \
   build/channel_state_js/channel_state.wasm build/input.json build/witness.wtns
 ```
@@ -74,16 +78,16 @@ lệnh trong lịch sử phiên làm việc hoặc `circuits/README.md` (đang b
 ```bash
 cd contracts && forge build
 cd ../chains && ./start_chain_a.sh && ./start_chain_b.sh
-cd ../relayer && npm install
-npm run deploy   # deploy PaymentChannel + LightClientVerifier lên mọi chain trong chains.config.json
-npm run e2e      # mở kênh, settle qua Chain A, relay proof thật, settle trên Chain B, rút tiền
+cd ../relayer
+pnpm run deploy   # deploy PaymentChannel + LightClientVerifier lên mọi chain trong chains.config.json
+pnpm run e2e      # mở kênh, settle qua Chain A, relay proof thật, settle trên Chain B, rút tiền
 ```
 
 `relayer/chains.config.json` liệt kê các chain theo tên (không giới hạn 2) —
 thêm chain thứ 3/4 (hoặc trỏ `chainA`/`chainB` sang testnet thật) chỉ cần sửa
 file này + `.env` (xem `relayer/.env.example`), không cần sửa code
-`deploy.js`/`index.js`. `deploy.js` tự deploy `LightClientVerifier` cho chain
-nào có `"lightClient": true`. `node src/index.js <channelId> [fromChain]
+`deploy.ts`/`index.ts`. `deploy.ts` tự deploy `LightClientVerifier` cho chain
+nào có `"lightClient": true`. `npx tsx src/index.ts <channelId> [fromChain]
 [toChain]` relay giữa 2 tên chain bất kỳ trong `deployment.json` (mặc định
 `chainA` → `chainB`).
 
@@ -95,8 +99,8 @@ hạn đã biết (relay 1 chiều, channelId giả định trùng giữa 2 chai
 ```bash
 cd contracts && forge build
 anvil --port 8545 &
-cd ../watchtower && npm install
-npm run e2e   # partyB "biến mất", partyA gian lận đóng kênh, watchtower tự cứu
+cd ../watchtower
+pnpm run e2e   # partyB "biến mất", partyA gian lận đóng kênh, watchtower tự cứu
 ```
 
 Xem `watchtower/README.md` cho chi tiết cơ chế và giới hạn.
@@ -104,7 +108,7 @@ Xem `watchtower/README.md` cho chi tiết cơ chế và giới hạn.
 ## Demo BLS12-381 validator thật (M4)
 
 ```bash
-cd bls-validators && npm install && node generate_keys.js
+cd bls-validators && pnpm run generate-keys
 cd ../contracts && forge test --match-contract "BLS12381Test|LightClientVerifierBLS"
 ```
 

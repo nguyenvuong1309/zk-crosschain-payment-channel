@@ -17,9 +17,9 @@ hộ bước phản đối này.
    2 bên gửi kèm `POST /checkpoint` cho watchtower — state + 2 chữ ký.
    Watchtower **tự verify** chữ ký khớp `partyA`/`partyB` thật của kênh
    (đọc on-chain qua `hashState()`) trước khi lưu — không tin mù bất kỳ dữ
-   liệu POST nào (`src/checkpoint.js`).
+   liệu POST nào (`src/checkpoint.ts`).
 2. **Theo dõi**: watchtower lắng nghe sự kiện `ChannelClosedUnilaterally` /
-   `ChannelChallenged` trên `PaymentChannel` (`src/monitor.js`).
+   `ChannelChallenged` trên `PaymentChannel` (`src/monitor.ts`).
 3. **Phản đối hộ**: nếu state on-chain sau sự kiện có nonce THẤP HƠN state đã
    checkpoint, và cửa sổ challenge còn mở, watchtower tự gọi `challenge()`
    với state đúng — không cần bên bị hại tỉnh táo hay online.
@@ -41,8 +41,7 @@ cd contracts && forge build
 anvil --port 8545 --chain-id 31337 &     # hoặc chains/start_chain_a.sh
 
 cd ../watchtower
-npm install
-npm run e2e
+pnpm run e2e
 ```
 
 Kịch bản: mở kênh, 2 vòng update off-chain (nonce 1 và 2, cả 2 đều
@@ -54,7 +53,7 @@ chính xác state nonce=2 (0.2/1.8 ETH), không phải state gian lận (0.7/1.3
 ## Chạy service thật
 
 ```bash
-WATCHTOWER_CONTRACT=<địa chỉ PaymentChannel> npm start
+WATCHTOWER_CONTRACT=<địa chỉ PaymentChannel> pnpm start
 ```
 
 Biến môi trường: `WATCHTOWER_RPC_URL` (mặc định `http://127.0.0.1:8545`),

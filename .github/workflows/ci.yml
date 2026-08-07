@@ -33,6 +33,30 @@ jobs:
         run: forge build --sizes
         working-directory: contracts
 
+  # relayer/, watchtower/, bls-validators/, circuits/ are one pnpm workspace
+  # (see /pnpm-workspace.yaml) — a single `pnpm install --frozen-lockfile` at
+  # the repo root installs all four. TypeScript compiles nothing to disk
+  # here (all four packages run their .ts sources directly via tsx, see
+  # each package.json), so this is a real "does everything still typecheck"
+  # gate, not just a lockfile sanity check.
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm -r run typecheck
+
   # Full test suite, including the FFI tests that shell out to a real
   # Groth16 prover (ChannelStateProof.t.sol, LightClient.t.sol,
   # KeyOwnership.t.sol) — see contracts/foundry.toml (ffi = true) and
@@ -49,11 +73,14 @@ jobs:
 
       - uses: foundry-rs/foundry-toolchain@v1
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: circuits/package-lock.json
+          cache: pnpm
 
       - name: Cache circom compiler
         id: cache-circom
@@ -71,21 +98,15 @@ jobs:
           chmod +x ~/.local/bin/circom
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: circuits — npm ci
-        run: npm ci
-        working-directory: circuits
-
-      # KeyOwnership.t.sol shells out to circuits/scripts/sign_key_ownership.js
-      # (already covered by circuits' own npm ci above), but
-      # LightClientVerifierBLS.t.sol / LightClientVerifierBLSIntegration.t.sol
-      # shell out to ../bls-validators/sign.js — a SEPARATE npm project with
-      # its own node_modules (@noble/curves, ethers), never installed by the
-      # circuits install above. Forgetting this step is exactly what broke
-      # this job the first time it ran in CI (MODULE_NOT_FOUND for
-      # @noble/curves) — see git history.
-      - name: bls-validators — npm ci
-        run: npm ci
-        working-directory: bls-validators
+      # Installs circuits/ AND bls-validators/ in one shot (pnpm workspace
+      # root install) — KeyOwnership.t.sol shells out to
+      # circuits/scripts/sign_key_ownership.ts, LightClientVerifierBLS(.Integration).t.sol
+      # shell out to ../bls-validators/sign.ts (via each package's own
+      # node_modules/.bin/tsx, see those test files' _sign() helpers).
+      # Forgetting bls-validators here is exactly what broke this job the
+      # first time it ran in CI (MODULE_NOT_FOUND for @noble/curves) — see
+      # git history.
+      - run: pnpm install --frozen-lockfile
 
       # Cache the whole trusted-setup output (r1cs, wasm witness
       # calculators, final zkeys) keyed on the circuit sources + the
@@ -215,7 +236,7 @@ jobs:
         working-directory: circuits-halo2
 
   # bls-validators/ — keys.json reproducibility + off-chain pairing
-  # self-check (see bls-validators/test.js). The on-chain half (precompile
+  # self-check (see bls-validators/test.ts). The on-chain half (precompile
   # cross-check, LightClientVerifierBLS integration) runs in test-ffi via
   # forge test — EIP-2537 precompiles are natively supported by Foundry's
   # revm, no extra setup needed there.
@@ -224,16 +245,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: bls-validators/package-lock.json
+          cache: pnpm
 
-      - run: npm ci
-        working-directory: bls-validators
+      - run: pnpm install --frozen-lockfile
 
-      - run: npm test
+      - run: pnpm test
         working-directory: bls-validators
 
   # watchtower/ end-to-end demo (Milestone 4) — real Anvil chain, real
@@ -248,11 +271,14 @@ jobs:
 
       - uses: foundry-rs/foundry-toolchain@v1
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: watchtower/package-lock.json
+          cache: pnpm
 
       - name: forge build
         run: forge build
@@ -261,9 +287,8 @@ jobs:
       - name: Start Anvil
         run: anvil --port 8545 --chain-id 31337 &
 
-      - run: npm ci
-        working-directory: watchtower
+      - run: pnpm install --frozen-lockfile
 
-      - name: npm run e2e
-        run: npm run e2e
+      - name: pnpm run e2e
+        run: pnpm run e2e
         working-directory: watchtower

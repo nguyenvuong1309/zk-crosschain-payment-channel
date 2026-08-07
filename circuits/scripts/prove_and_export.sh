@@ -28,8 +28,11 @@ BUILD_DIR="$CIRCUITS_DIR/build"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-node "$SCRIPT_DIR/build_ffi_input.js" "$CONTRACT_ADDRESS" "$CHAIN_ID" "$CHANNEL_ID" > "$WORKDIR/input.json"
+TSX="$CIRCUITS_DIR/node_modules/.bin/tsx"
 
+"$TSX" "$SCRIPT_DIR/build_ffi_input.ts" "$CONTRACT_ADDRESS" "$CHAIN_ID" "$CHANNEL_ID" > "$WORKDIR/input.json"
+
+# generate_witness.js is circom-generated output (not ours) — stays plain JS.
 node "$BUILD_DIR/channel_state_js/generate_witness.js" \
   "$BUILD_DIR/channel_state_js/channel_state.wasm" \
   "$WORKDIR/input.json" \
@@ -41,4 +44,4 @@ npx --prefix "$CIRCUITS_DIR" snarkjs groth16 prove \
   "$WORKDIR/proof.json" \
   "$WORKDIR/public.json" >&2
 
-node "$SCRIPT_DIR/format_ffi_output.js" "$WORKDIR/proof.json" "$WORKDIR/public.json"
+"$TSX" "$SCRIPT_DIR/format_ffi_output.ts" "$WORKDIR/proof.json" "$WORKDIR/public.json"

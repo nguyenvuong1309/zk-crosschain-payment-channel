@@ -64,7 +64,7 @@ Verifier Solidity export lại từ các zkey này:
 ## Build lại từ đầu
 
 ```bash
-npm install
+pnpm install
 npx circom circuits/channel_state.circom --r1cs --wasm --sym -l node_modules -o build
 npx circom circuits/consensus_proof.circom --r1cs --wasm --sym -l node_modules -o build
 
