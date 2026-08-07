@@ -284,3 +284,77 @@ jobs:
       - name: pnpm run e2e
         run: pnpm run e2e
         working-directory: watchtower
+
+  # relayer/ end-to-end cross-chain demo (Milestone 3) — real 2-Anvil setup,
+  # real consensus_proof.circom proof relayed Chain A -> Chain B, asserts
+  # Chain B's payout matches Chain A's attested state. See README.md's
+  # "Demo cross-chain (M3) đầy đủ" section and relayer/src/e2e_demo.ts.
+  #
+  # `needs: test-ffi` isn't a correctness dependency — it's reused purely to
+  # guarantee circuits/build/'s cache entry (ceremony output, see test-ffi's
+  # own comments) is already populated by the time this job starts, instead
+  # of ceremonying + downloading the 151MB ptau file a second time in
+  # parallel for the same commit.
+  relayer-e2e:
+    needs: test-ffi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Same cache as test-ffi (identical key) — see that job for what's in
+      # it and why. Expected to always hit here since test-ffi (a dependency
+      # of this job) just populated it.
+      - name: Restore circuit build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            circuits/build/*.r1cs
+            circuits/build/*_js
+            circuits/build/*_final*.zkey
+            circuits/build/powersOfTau28_hez_final_17.ptau
+          key: circuit-build-${{ hashFiles('circuits/circuits/**/*.circom', 'circuits/scripts/run_phase2_ceremony.sh') }}
+
+      # Each job runs in its own fresh checkout — contracts/src/ isn't
+      # cached, so the committed Groth16Verifier*.sol (bound to whoever's
+      # local one-off ceremony) won't match the zkey just restored above.
+      # Same fix as test-ffi's identically-named step: re-export both
+      # verifiers from THIS job's zkey before building/deploying anything.
+      - name: Re-export Solidity verifiers from the cached zkeys
+        working-directory: circuits
+        run: |
+          npx snarkjs zkey export solidityverifier build/channel_state_final_v2.zkey /tmp/v.sol
+          cp /tmp/v.sol ../contracts/src/Groth16Verifier.sol
+
+          npx snarkjs zkey export solidityverifier build/consensus_proof_final.zkey /tmp/vc.sol
+          sed 's/contract Groth16Verifier/contract Groth16VerifierConsensus/' /tmp/vc.sol \
+            > ../contracts/src/Groth16VerifierConsensus.sol
+
+      - name: forge build
+        run: forge build
+        working-directory: contracts
+
+      - name: Start Chain A + Chain B (Anvil)
+        run: |
+          anvil --port 8545 --chain-id 31337 --block-time 2 &
+          anvil --port 8546 --chain-id 31338 --block-time 3 &
+
+      - name: pnpm run deploy
+        run: pnpm run deploy
+        working-directory: relayer
+
+      - name: pnpm run e2e
+        run: pnpm run e2e
+        working-directory: relayer

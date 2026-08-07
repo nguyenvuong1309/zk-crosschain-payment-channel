@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+# Fast local gate before every commit — NOT a substitute for CI. Deliberately
+# excludes anything slow/stateful (forge test --ffi needs a built circuit +
+# trusted setup; the e2e demos need live Anvil chains) — those stay CI-only
+# (.github/workflows/ci.yml) so this hook stays fast enough that nobody is
+# tempted to `git commit --no-verify` around it.
+set -e
+
+echo "[pre-commit] forge fmt --check"
+(cd contracts && forge fmt --check)
+
+echo "[pre-commit] typecheck (relayer/watchtower/bls-validators/circuits)"
+pnpm -r run typecheck

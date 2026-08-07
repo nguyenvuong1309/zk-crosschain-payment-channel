@@ -5,6 +5,10 @@
   "description": "Workspace root for relayer/, watchtower/, bls-validators/, circuits/ — see PLAN.md. Contracts (contracts/) are a separate Foundry project, not part of this workspace.",
   "packageManager": "pnpm@11.17.0",
   "scripts": {
-    "typecheck": "pnpm -r run typecheck"
+    "typecheck": "pnpm -r run typecheck",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
   }
 }

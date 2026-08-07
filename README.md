@@ -54,13 +54,16 @@ git clone --recurse-submodules <repo-url>
 # Nếu đã clone thiếu submodule:
 git submodule update --init --recursive
 
-# Contracts
-cd contracts && forge test -vv   # foundry.toml đã bật ffi=true, cần cho test proof ZK thật
-
 # relayer/, watchtower/, bls-validators/, circuits/ là 1 pnpm workspace
 # (xem pnpm-workspace.yaml) — 1 lệnh cài hết cả 4 (tất cả code TypeScript,
-# chạy trực tiếp qua tsx, không cần build step riêng).
+# chạy trực tiếp qua tsx, không cần build step riêng). Cũng tự chạy `husky`
+# (qua "prepare") — bật pre-commit hook chạy forge fmt --check + typecheck
+# toàn workspace (~1-2s), KHÔNG chạy test nặng/e2e (những cái đó chỉ chạy
+# trong CI, xem .github/workflows/ci.yml).
 pnpm install
+
+# Contracts
+cd contracts && forge test -vv   # foundry.toml đã bật ffi=true, cần cho test proof ZK thật
 
 # Circuit: compile, sinh input mẫu, tạo witness
 cd circuits
