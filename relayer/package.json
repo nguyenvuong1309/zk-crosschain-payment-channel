@@ -6,6 +6,7 @@
   "scripts": {
     "deploy": "tsx src/deploy.ts",
     "relay": "tsx src/index.ts",
+    "watch": "tsx src/watch.ts",
     "e2e": "tsx src/e2e_demo.ts",
     "typecheck": "tsc --noEmit"
   },

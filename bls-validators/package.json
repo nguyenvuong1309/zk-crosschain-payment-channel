@@ -6,6 +6,7 @@
   "scripts": {
     "test": "tsx test.ts",
     "generate-keys": "tsx generate_keys.ts",
+    "probe-sync-committee": "tsx sync_committee_probe.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [],

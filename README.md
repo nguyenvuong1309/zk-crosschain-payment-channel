@@ -26,10 +26,25 @@ cho giả định tin cậy và giới hạn của demo — đọc trước khi 
 | Audit circuit `channel_state.circom` (tìm + vá 1 lỗi thật: thiếu range-check nonce) | ✅ 1 vòng — `docs/threat-model.md` #3 |
 | Security review `contracts/src/` | ✅ 1 vòng, không phát hiện lỗ hổng mới |
 | BLS12-381 validator thật (khoá + aggregate signature + pairing check thật qua precompile EIP-2537) | ✅ Xong — `bls-validators/`, `contracts/src/LightClientVerifierBLS.sol` |
+| Relayer watch-loop tự động (không cần gọi tay sau mỗi update) | ✅ Xong — `relayer/src/watch.ts`, `pnpm run watch` |
 | Audit bảo mật độc lập bởi bên thứ 3 | ⏳ Cần nguồn lực ngoài, chưa làm |
-| Sync committee Ethereum thật (SSZ, beacon header) | ⏳ Ngoài phạm vi demo |
+| Sync committee Ethereum thật (SSZ, beacon header) | 🔶 Đang làm — xem Milestone 5, `PLAN.md` |
 
-44 test Foundry pass (`forge test`, cần `--ffi`), cộng thêm test hình thức
+**Milestone 5 (6/6 việc kế hoạch gốc xong, còn 2 giới hạn hardening mở)** —
+thay validator giả lập bằng sync committee Ethereum thật: verify off-chain
+thành công cả chữ ký BLS aggregate **thật** lẫn SSZ merkle proof **thật**
+của mainnet; `LightClientVerifierBLSGeneral.sol` verify quorum **342-of-512
+thật**; `contracts/src/SSZ.sol` verify merkle proof on-chain (root khớp
+chính xác off-chain) — gas thật đo được dùng để **quyết định xong on-chain
+thay vì cần circuit riêng**; và đã **đăng ký + verify merkle proof của
+đúng 512-key committee mainnet thật on-chain**
+(`contracts/test/LightClientVerifierBLSReal.t.sol`, dữ liệu đóng băng từ
+snapshot mainnet thật). Còn mở: chữ ký BLS thật chưa verify được on-chain
+(cần RFC9380 hash-to-curve trên Solidity, việc lớn riêng) và chưa có
+"trustless bootstrap" (vẫn tin 1 node public). Chi tiết đầy đủ: `PLAN.md`
+Milestone 5.
+
+55 test Foundry pass (`forge test`, cần `--ffi`), cộng thêm test hình thức
 Halmos (`contracts/test/PaymentChannel.formal.t.sol`) và test Rust cho
 circuit Halo2 (`circuits-halo2/`, `cargo test`).
 
@@ -91,8 +106,13 @@ thêm chain thứ 3/4 (hoặc trỏ `chainA`/`chainB` sang testnet thật) chỉ
 file này + `.env` (xem `relayer/.env.example`), không cần sửa code
 `deploy.ts`/`index.ts`. `deploy.ts` tự deploy `LightClientVerifier` cho chain
 nào có `"lightClient": true`. `npx tsx src/index.ts <channelId> [fromChain]
-[toChain]` relay giữa 2 tên chain bất kỳ trong `deployment.json` (mặc định
-`chainA` → `chainB`).
+[toChain]` relay 1 lần theo yêu cầu giữa 2 tên chain bất kỳ trong
+`deployment.json` (mặc định `chainA` → `chainB`).
+
+**Watch-loop tự động (M4)**: `pnpm run watch [fromChain] [toChain]` chạy
+daemon subscribe sự kiện đóng/challenge kênh trên chain nguồn và tự relay
+ngay khi có state mới — không cần gọi `index.ts` tay sau mỗi update. Vá
+giả định tin cậy #7 trong `docs/threat-model.md`.
 
 Xem `chains/README.md` và `PLAN.md` Milestone 3 cho chi tiết luồng và giới
 hạn đã biết (relay 1 chiều, channelId giả định trùng giữa 2 chain).
