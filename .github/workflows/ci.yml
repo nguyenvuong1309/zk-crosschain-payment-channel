@@ -80,7 +80,7 @@ jobs:
 
       - name: Cache circom compiler
         id: cache-circom
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.local/bin/circom
           key: circom-${{ env.CIRCOM_VERSION }}-linux
@@ -111,7 +111,7 @@ jobs:
       # something that affects the proving key actually changes.
       - name: Cache circuit build artifacts
         id: cache-circuit-build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             circuits/build/*.r1cs
@@ -318,7 +318,7 @@ jobs:
       # it and why. Expected to always hit here since test-ffi (a dependency
       # of this job) just populated it.
       - name: Restore circuit build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             circuits/build/*.r1cs
