@@ -75,6 +75,18 @@ jobs:
         run: npm ci
         working-directory: circuits
 
+      # KeyOwnership.t.sol shells out to circuits/scripts/sign_key_ownership.js
+      # (already covered by circuits' own npm ci above), but
+      # LightClientVerifierBLS.t.sol / LightClientVerifierBLSIntegration.t.sol
+      # shell out to ../bls-validators/sign.js — a SEPARATE npm project with
+      # its own node_modules (@noble/curves, ethers), never installed by the
+      # circuits install above. Forgetting this step is exactly what broke
+      # this job the first time it ran in CI (MODULE_NOT_FOUND for
+      # @noble/curves) — see git history.
+      - name: bls-validators — npm ci
+        run: npm ci
+        working-directory: bls-validators
+
       # Cache the whole trusted-setup output (r1cs, wasm witness
       # calculators, final zkeys) keyed on the circuit sources + the
       # ceremony script, so the phase-2 ceremony (3 contributions per
