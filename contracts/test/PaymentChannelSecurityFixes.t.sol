@@ -34,7 +34,9 @@ contract PaymentChannelSecurityFixesTest is Test {
 
     function _sign(uint256 key, PaymentChannel.ChannelState memory state) internal view returns (bytes memory) {
         bytes32 digest = channel.hashState(
-            PaymentChannel.ChannelState({channelId: state.channelId, nonce: state.nonce, balanceA: state.balanceA, balanceB: state.balanceB})
+            PaymentChannel.ChannelState({
+                channelId: state.channelId, nonce: state.nonce, balanceA: state.balanceA, balanceB: state.balanceB
+            })
         );
         bytes32 ethDigest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", digest));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, ethDigest);
@@ -44,7 +46,8 @@ contract PaymentChannelSecurityFixesTest is Test {
     // --- Fix A: domain separator prevents cross-deployment signature replay ---
 
     function test_hashState_differsAcrossDeployments_forSameChannelData() public {
-        PaymentChannel otherChannel = new PaymentChannel(IChannelStateVerifier(address(verifier)), ILightClientVerifier(address(0)));
+        PaymentChannel otherChannel =
+            new PaymentChannel(IChannelStateVerifier(address(verifier)), ILightClientVerifier(address(0)));
 
         PaymentChannel.ChannelState memory state =
             PaymentChannel.ChannelState({channelId: 1, nonce: 1, balanceA: 1 ether, balanceB: 1 ether});
@@ -61,7 +64,8 @@ contract PaymentChannelSecurityFixesTest is Test {
     function test_closeCooperative_revertsWhenSignatureIsFromAnotherDeployment() public {
         // Channel on "Chain A" (this `channel`) and an identical one on a
         // second deployment standing in for "Chain B".
-        PaymentChannel channelOnChainB = new PaymentChannel(IChannelStateVerifier(address(verifier)), ILightClientVerifier(address(0)));
+        PaymentChannel channelOnChainB =
+            new PaymentChannel(IChannelStateVerifier(address(verifier)), ILightClientVerifier(address(0)));
 
         vm.prank(partyA);
         uint256 channelId = channel.open{value: 1 ether}(partyB, 1 ether, 0, 0, 0, 0, 0);
@@ -72,7 +76,10 @@ contract PaymentChannelSecurityFixesTest is Test {
         uint256 channelIdOnB = channelOnChainB.open{value: 1 ether}(partyB, 1 ether, 0, 0, 0, 0, 0);
         vm.prank(partyB);
         channelOnChainB.join{value: 1 ether}(channelIdOnB, 0, 0, 0, 0, 0);
-        require(channelIdOnB == channelId, "test setup: channel ids must match to prove the replay is blocked by domain, not id");
+        require(
+            channelIdOnB == channelId,
+            "test setup: channel ids must match to prove the replay is blocked by domain, not id"
+        );
 
         // Sign a state using channelOnChainB's domain (its hashState).
         PaymentChannel.ChannelState memory state =
@@ -203,7 +210,11 @@ contract PaymentChannelSecurityFixesTest is Test {
         channel.join{value: 1 ether}(channelId, 0, 0, 0, 0, 0);
 
         vm.prank(partyA);
-        vm.expectRevert(abi.encodeWithSelector(PaymentChannel.WrongStatus.selector, PaymentChannel.Status.UNINITIALIZED, PaymentChannel.Status.ACTIVE));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PaymentChannel.WrongStatus.selector, PaymentChannel.Status.UNINITIALIZED, PaymentChannel.Status.ACTIVE
+            )
+        );
         channel.cancelUnjoined(channelId);
     }
 

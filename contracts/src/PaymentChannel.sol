@@ -18,10 +18,12 @@ import {BabyJubJub} from "./BabyJubJub.sol";
 /// `contractAddress`/`chainId` are the domain separator baked into the
 /// signed message inside the circuit — see channel_state.circom.
 interface IChannelStateVerifier {
-    function verifyProof(uint256[2] calldata _pA, uint256[2][2] calldata _pB, uint256[2] calldata _pC, uint256[12] calldata _pubSignals)
-        external
-        view
-        returns (bool);
+    function verifyProof(
+        uint256[2] calldata _pA,
+        uint256[2][2] calldata _pB,
+        uint256[2] calldata _pC,
+        uint256[12] calldata _pubSignals
+    ) external view returns (bool);
 }
 
 /// @notice Minimal view into LightClientVerifier.sol (Milestone 3) — the
@@ -124,7 +126,9 @@ contract PaymentChannel {
     ///         OTHER party's funds from settling — see `_payout`.
     mapping(address => uint256) public pendingWithdrawals;
 
-    event ChannelOpened(uint256 indexed channelId, address indexed partyA, address indexed partyB, uint256 depositA, uint256 depositB);
+    event ChannelOpened(
+        uint256 indexed channelId, address indexed partyA, address indexed partyB, uint256 depositA, uint256 depositB
+    );
     event ChannelCancelled(uint256 indexed channelId, uint256 refundedToPartyA);
     event ChannelClosedCooperatively(uint256 indexed channelId, uint256 nonce, uint256 balanceA, uint256 balanceB);
     event ChannelClosedUnilaterally(uint256 indexed channelId, uint256 nonce, uint256 challengeExpiry);
@@ -201,7 +205,10 @@ contract PaymentChannel {
     /// @notice PartyB joins and funds their side of an UNINITIALIZED channel,
     ///         registering their own EdDSA public key (see `open()`'s doc comment
     ///         on `sigR8x/R8y/sigS` and the zero-key exemption).
-    function join(uint256 channelId, uint256 pubKeyBx, uint256 pubKeyBy, uint256 sigR8x, uint256 sigR8y, uint256 sigS) external payable {
+    function join(uint256 channelId, uint256 pubKeyBx, uint256 pubKeyBy, uint256 sigR8x, uint256 sigR8y, uint256 sigS)
+        external
+        payable
+    {
         Channel storage ch = channels[channelId];
         if (msg.sender != ch.partyB) revert InvalidParty();
         if (ch.status != Status.UNINITIALIZED) revert WrongStatus(Status.UNINITIALIZED, ch.status);
@@ -237,7 +244,10 @@ contract PaymentChannel {
 
     /// @notice Close the channel immediately using a state signed by BOTH parties.
     ///         No challenge period needed since both parties agree.
-    function closeCooperative(ChannelState calldata state, bytes calldata sigA, bytes calldata sigB) external onlyParty(state.channelId) {
+    function closeCooperative(ChannelState calldata state, bytes calldata sigA, bytes calldata sigB)
+        external
+        onlyParty(state.channelId)
+    {
         Channel storage ch = channels[state.channelId];
         if (ch.status != Status.ACTIVE && ch.status != Status.CHALLENGE_PERIOD) {
             revert WrongStatus(Status.ACTIVE, ch.status);
@@ -258,7 +268,10 @@ contract PaymentChannel {
     /// @notice Start unilateral close with the latest state either party has,
     ///         signed by both. Opens a challenge window for the counterparty
     ///         to override with a newer state, in case this one is stale.
-    function closeUnilateral(ChannelState calldata state, bytes calldata sigA, bytes calldata sigB) external onlyParty(state.channelId) {
+    function closeUnilateral(ChannelState calldata state, bytes calldata sigA, bytes calldata sigB)
+        external
+        onlyParty(state.channelId)
+    {
         Channel storage ch = channels[state.channelId];
         if (ch.status != Status.ACTIVE) revert WrongStatus(Status.ACTIVE, ch.status);
         _verifyBothSignatures(ch, state.channelId, state, sigA, sigB);
@@ -318,7 +331,8 @@ contract PaymentChannel {
         Channel storage ch = channels[channelId];
         if (ch.status != Status.ACTIVE) revert WrongStatus(Status.ACTIVE, ch.status);
 
-        (uint256 outNonce, uint256 outBalanceA, uint256 outBalanceB) = _verifyChannelProof(ch, channelId, a, b, c, pubSignals);
+        (uint256 outNonce, uint256 outBalanceA, uint256 outBalanceB) =
+            _verifyChannelProof(ch, channelId, a, b, c, pubSignals);
         if (outNonce < ch.nonce) revert StaleNonce();
 
         ch.balanceA = outBalanceA;
@@ -346,7 +360,8 @@ contract PaymentChannel {
         if (ch.status != Status.CHALLENGE_PERIOD) revert WrongStatus(Status.CHALLENGE_PERIOD, ch.status);
         if (block.timestamp >= ch.challengeExpiry) revert ChallengeWindowClosed();
 
-        (uint256 outNonce, uint256 outBalanceA, uint256 outBalanceB) = _verifyChannelProof(ch, channelId, a, b, c, pubSignals);
+        (uint256 outNonce, uint256 outBalanceA, uint256 outBalanceB) =
+            _verifyChannelProof(ch, channelId, a, b, c, pubSignals);
         if (outNonce <= ch.nonce) revert StaleNonce();
 
         ch.balanceA = outBalanceA;
@@ -376,10 +391,12 @@ contract PaymentChannel {
     ///      consensus_proof.circom. Starts the same challenge window as
     ///      `closeWithProof`/`closeUnilateral` — a remote attestation can
     ///      still describe a stale (but genuinely once-true) state.
-    function closeWithRemoteAttestation(uint256 channelId, address remoteContract, uint256 remoteChainId, ChannelState calldata state)
-        external
-        onlyParty(channelId)
-    {
+    function closeWithRemoteAttestation(
+        uint256 channelId,
+        address remoteContract,
+        uint256 remoteChainId,
+        ChannelState calldata state
+    ) external onlyParty(channelId) {
         if (address(lightClientVerifier) == address(0)) revert LightClientNotConfigured();
         Channel storage ch = channels[channelId];
         if (ch.status != Status.ACTIVE) revert WrongStatus(Status.ACTIVE, ch.status);
@@ -388,7 +405,9 @@ contract PaymentChannel {
         _checkConservation(ch, state);
 
         uint256 remoteStateHash = uint256(
-            keccak256(abi.encode(remoteContract, remoteChainId, state.channelId, state.nonce, state.balanceA, state.balanceB))
+            keccak256(
+                abi.encode(remoteContract, remoteChainId, state.channelId, state.nonce, state.balanceA, state.balanceB)
+            )
         ) % BabyJubJub.Q;
         if (remoteStateHash != lightClientVerifier.trustedStateRoot(remoteChainId)) revert UntrustedRemoteState();
 
@@ -473,10 +492,13 @@ contract PaymentChannel {
         if (state.balanceA + state.balanceB != ch.depositA + ch.depositB) revert DepositMismatch();
     }
 
-    function _verifyBothSignatures(Channel storage ch, uint256 channelId, ChannelState calldata state, bytes calldata sigA, bytes calldata sigB)
-        internal
-        view
-    {
+    function _verifyBothSignatures(
+        Channel storage ch,
+        uint256 channelId,
+        ChannelState calldata state,
+        bytes calldata sigA,
+        bytes calldata sigB
+    ) internal view {
         if (state.channelId != channelId) revert ChannelIdMismatch();
         if (state.nonce < ch.nonce) revert StaleNonce();
 
@@ -545,7 +567,7 @@ contract PaymentChannel {
     ///      call `claim()`.
     function _creditOrSend(address to, uint256 amount) internal {
         if (amount == 0) return;
-        (bool ok, ) = to.call{value: amount, gas: 30_000}("");
+        (bool ok,) = to.call{value: amount, gas: 30_000}("");
         if (ok) return;
         pendingWithdrawals[to] += amount;
         emit PayoutCredited(to, amount);
@@ -558,7 +580,7 @@ contract PaymentChannel {
         if (amount == 0) revert NothingToClaim();
         pendingWithdrawals[msg.sender] = 0;
 
-        (bool ok, ) = msg.sender.call{value: amount}("");
+        (bool ok,) = msg.sender.call{value: amount}("");
         if (!ok) revert ClaimTransferFailed();
 
         emit Claimed(msg.sender, amount);
@@ -576,6 +598,8 @@ contract PaymentChannel {
     ///         binding, simplified (no full typed-data encoding) since this
     ///         demo doesn't need wallet-UI-friendly signing.
     function hashState(ChannelState calldata state) public view returns (bytes32) {
-        return keccak256(abi.encode(address(this), block.chainid, state.channelId, state.nonce, state.balanceA, state.balanceB));
+        return keccak256(
+            abi.encode(address(this), block.chainid, state.channelId, state.nonce, state.balanceA, state.balanceB)
+        );
     }
 }

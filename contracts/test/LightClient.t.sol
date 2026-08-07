@@ -35,9 +35,12 @@ contract LightClientTest is Test {
         lightClient = new LightClientVerifier(IConsensusVerifier(address(consensusVerifier)));
 
         // "Chain A": no light client needed, it's the attestation source.
-        channelA = new PaymentChannel(IChannelStateVerifier(address(channelStateVerifier)), ILightClientVerifier(address(0)));
+        channelA =
+            new PaymentChannel(IChannelStateVerifier(address(channelStateVerifier)), ILightClientVerifier(address(0)));
         // "Chain B": configured to trust `lightClient`.
-        channelB = new PaymentChannel(IChannelStateVerifier(address(channelStateVerifier)), ILightClientVerifier(address(lightClient)));
+        channelB = new PaymentChannel(
+            IChannelStateVerifier(address(channelStateVerifier)), ILightClientVerifier(address(lightClient))
+        );
 
         vm.deal(partyA, 10 ether);
         vm.deal(partyB, 10 ether);
@@ -78,8 +81,11 @@ contract LightClientTest is Test {
         pure
         returns (uint256)
     {
-        return uint256(keccak256(abi.encode(remoteContract, remoteChainId, state.channelId, state.nonce, state.balanceA, state.balanceB)))
-            % BabyJubJub.Q;
+        return uint256(
+            keccak256(
+            abi.encode(remoteContract, remoteChainId, state.channelId, state.nonce, state.balanceA, state.balanceB)
+        )
+        ) % BabyJubJub.Q;
     }
 
     function test_updateState_acceptsRealQuorumProof() public {
@@ -162,7 +168,8 @@ contract LightClientTest is Test {
         vm.prank(partyA);
         channelB.closeWithRemoteAttestation(channelId, address(channelA), REMOTE_CHAIN_ID, state);
 
-        (,,,, PaymentChannel.Status status, uint256 nonce, uint256 balA, uint256 balB,,,,,) = channelB.channels(channelId);
+        (,,,, PaymentChannel.Status status, uint256 nonce, uint256 balA, uint256 balB,,,,,) =
+            channelB.channels(channelId);
         assertEq(uint256(status), uint256(PaymentChannel.Status.CHALLENGE_PERIOD));
         assertEq(nonce, 1);
         assertEq(balA, 0.5 ether);

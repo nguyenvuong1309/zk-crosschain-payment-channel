@@ -130,21 +130,26 @@ contract ChannelStateProofTest is Test {
 
     function test_verifierAcceptsRealProof_boundToActualDeployedAddress() public {
         uint256 channelId = _openRealChannel();
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) = _generateProof(channelId);
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+            _generateProof(channelId);
 
         assertTrue(verifier.verifyProof(a, b, c, pubSignals));
-        assertEq(pubSignals[10], uint256(uint160(address(channel))), "proof's contractAddress must match actual deployment");
+        assertEq(
+            pubSignals[10], uint256(uint160(address(channel))), "proof's contractAddress must match actual deployment"
+        );
         assertEq(pubSignals[11], block.chainid, "proof's chainId must match actual chain");
     }
 
     function test_closeWithProof_startsChallengePeriodWithDecodedState() public {
         uint256 channelId = _openRealChannel();
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) = _generateProof(channelId);
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+            _generateProof(channelId);
 
         vm.prank(partyA);
         channel.closeWithProof(channelId, a, b, c, pubSignals);
 
-        (, , , , PaymentChannel.Status status, uint256 nonce, uint256 balA, uint256 balB, , , , , ) = channel.channels(channelId);
+        (,,,, PaymentChannel.Status status, uint256 nonce, uint256 balA, uint256 balB,,,,,) =
+            channel.channels(channelId);
         assertEq(uint256(status), uint256(PaymentChannel.Status.CHALLENGE_PERIOD));
         assertEq(nonce, 6);
         assertEq(balA, 400_000);
@@ -153,7 +158,8 @@ contract ChannelStateProofTest is Test {
 
     function test_closeWithProof_thenWithdrawAfterWindow_paysOutProvenBalances() public {
         uint256 channelId = _openRealChannel();
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) = _generateProof(channelId);
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+            _generateProof(channelId);
 
         vm.prank(partyA);
         channel.closeWithProof(channelId, a, b, c, pubSignals);
@@ -172,7 +178,8 @@ contract ChannelStateProofTest is Test {
 
     function test_closeWithProof_revertsOnWrongChannelId() public {
         uint256 channelId = _openRealChannel();
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) = _generateProof(channelId);
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+            _generateProof(channelId);
 
         pubSignals[3] = channelId + 999; // tamper with the channelId public signal
 
@@ -192,7 +199,8 @@ contract ChannelStateProofTest is Test {
         vm.prank(partyB);
         channel.join{value: DEPOSIT_B}(channelId, 0, 0, 0, 0, 0);
 
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) = _generateProof(channelId);
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+            _generateProof(channelId);
         pubSignals[3] = channelId;
 
         vm.prank(partyA);
@@ -202,7 +210,8 @@ contract ChannelStateProofTest is Test {
 
     function test_closeWithProof_revertsOnTamperedProof() public {
         uint256 channelId = _openRealChannel();
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) = _generateProof(channelId);
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+            _generateProof(channelId);
 
         pubSignals[1] = 999_999; // claim a different outBalanceA without a matching proof
 

@@ -69,9 +69,13 @@ contract LightClientVerifierBLS {
     ///        validator's individual signature over the SAME message point
     ///        — see `bls-validators/sign.js` for how this is produced
     ///        off-chain.
-    function updateState(uint256 chainId, uint256 blockNumber, uint256 stateRoot, uint256 participantBitmap, bytes calldata aggSig)
-        external
-    {
+    function updateState(
+        uint256 chainId,
+        uint256 blockNumber,
+        uint256 stateRoot,
+        uint256 participantBitmap,
+        bytes calldata aggSig
+    ) external {
         if (blockNumber <= trustedBlockNumber[chainId]) revert StaleBlockNumber();
         if (_popcount(participantBitmap) < THRESHOLD) revert InsufficientQuorum();
         if (aggSig.length != 256) revert InvalidSignatureLength();

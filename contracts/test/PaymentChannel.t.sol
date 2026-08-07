@@ -44,10 +44,7 @@ contract PaymentChannelTest is Test {
     function _sign(uint256 key, PaymentChannel.ChannelState memory state) internal view returns (bytes memory) {
         bytes32 digest = channel.hashState(
             PaymentChannel.ChannelState({
-                channelId: state.channelId,
-                nonce: state.nonce,
-                balanceA: state.balanceA,
-                balanceB: state.balanceB
+                channelId: state.channelId, nonce: state.nonce, balanceA: state.balanceA, balanceB: state.balanceB
             })
         );
         bytes32 ethDigest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", digest));
@@ -57,7 +54,7 @@ contract PaymentChannelTest is Test {
 
     function test_openAndJoin_setsActive() public {
         uint256 channelId = _openAndJoin(1 ether, 1 ether);
-        (, , uint256 depositA, uint256 depositB, PaymentChannel.Status status, , uint256 balA, uint256 balB, , , , , ) =
+        (,, uint256 depositA, uint256 depositB, PaymentChannel.Status status,, uint256 balA, uint256 balB,,,,,) =
             channel.channels(channelId);
         assertEq(depositA, 1 ether);
         assertEq(depositB, 1 ether);
@@ -70,12 +67,8 @@ contract PaymentChannelTest is Test {
         uint256 channelId = _openAndJoin(1 ether, 1 ether);
 
         // simulate an off-chain payment: A pays B 0.3 ETH
-        PaymentChannel.ChannelState memory state = PaymentChannel.ChannelState({
-            channelId: channelId,
-            nonce: 1,
-            balanceA: 0.7 ether,
-            balanceB: 1.3 ether
-        });
+        PaymentChannel.ChannelState memory state =
+            PaymentChannel.ChannelState({channelId: channelId, nonce: 1, balanceA: 0.7 ether, balanceB: 1.3 ether});
         bytes memory sigA = _sign(partyAKey, state);
         bytes memory sigB = _sign(partyBKey, state);
 
@@ -88,19 +81,15 @@ contract PaymentChannelTest is Test {
         assertEq(partyA.balance, balABefore + 0.7 ether);
         assertEq(partyB.balance, balBBefore + 1.3 ether);
 
-        (, , , , PaymentChannel.Status status, , , , , , , , ) = channel.channels(channelId);
+        (,,,, PaymentChannel.Status status,,,,,,,,) = channel.channels(channelId);
         assertEq(uint256(status), uint256(PaymentChannel.Status.CLOSED));
     }
 
     function test_cooperativeClose_revertsOnBadSignature() public {
         uint256 channelId = _openAndJoin(1 ether, 1 ether);
 
-        PaymentChannel.ChannelState memory state = PaymentChannel.ChannelState({
-            channelId: channelId,
-            nonce: 1,
-            balanceA: 0.7 ether,
-            balanceB: 1.3 ether
-        });
+        PaymentChannel.ChannelState memory state =
+            PaymentChannel.ChannelState({channelId: channelId, nonce: 1, balanceA: 0.7 ether, balanceB: 1.3 ether});
         bytes memory sigA = _sign(partyAKey, state);
         // wrong signer for B
         bytes memory badSigB = _sign(partyAKey, state);
@@ -114,12 +103,8 @@ contract PaymentChannelTest is Test {
         uint256 channelId = _openAndJoin(1 ether, 1 ether);
 
         // balances don't sum to total deposits (2 ether) -> should revert
-        PaymentChannel.ChannelState memory state = PaymentChannel.ChannelState({
-            channelId: channelId,
-            nonce: 1,
-            balanceA: 0.7 ether,
-            balanceB: 2 ether
-        });
+        PaymentChannel.ChannelState memory state =
+            PaymentChannel.ChannelState({channelId: channelId, nonce: 1, balanceA: 0.7 ether, balanceB: 2 ether});
         bytes memory sigA = _sign(partyAKey, state);
         bytes memory sigB = _sign(partyBKey, state);
 
@@ -131,12 +116,8 @@ contract PaymentChannelTest is Test {
     function test_unilateralClose_thenWithdrawAfterWindow() public {
         uint256 channelId = _openAndJoin(1 ether, 1 ether);
 
-        PaymentChannel.ChannelState memory state = PaymentChannel.ChannelState({
-            channelId: channelId,
-            nonce: 1,
-            balanceA: 0.4 ether,
-            balanceB: 1.6 ether
-        });
+        PaymentChannel.ChannelState memory state =
+            PaymentChannel.ChannelState({channelId: channelId, nonce: 1, balanceA: 0.4 ether, balanceB: 1.6 ether});
         bytes memory sigA = _sign(partyAKey, state);
         bytes memory sigB = _sign(partyBKey, state);
 
@@ -164,12 +145,8 @@ contract PaymentChannelTest is Test {
         uint256 channelId = _openAndJoin(1 ether, 1 ether);
 
         // partyA tries to close with an OLD state favoring itself (stale/malicious)
-        PaymentChannel.ChannelState memory staleState = PaymentChannel.ChannelState({
-            channelId: channelId,
-            nonce: 1,
-            balanceA: 1.5 ether,
-            balanceB: 0.5 ether
-        });
+        PaymentChannel.ChannelState memory staleState =
+            PaymentChannel.ChannelState({channelId: channelId, nonce: 1, balanceA: 1.5 ether, balanceB: 0.5 ether});
         bytes memory staleSigA = _sign(partyAKey, staleState);
         bytes memory staleSigB = _sign(partyBKey, staleState);
 
@@ -177,12 +154,8 @@ contract PaymentChannelTest is Test {
         channel.closeUnilateral(staleState, staleSigA, staleSigB);
 
         // partyB challenges with the real latest state (higher nonce)
-        PaymentChannel.ChannelState memory latestState = PaymentChannel.ChannelState({
-            channelId: channelId,
-            nonce: 2,
-            balanceA: 0.2 ether,
-            balanceB: 1.8 ether
-        });
+        PaymentChannel.ChannelState memory latestState =
+            PaymentChannel.ChannelState({channelId: channelId, nonce: 2, balanceA: 0.2 ether, balanceB: 1.8 ether});
         bytes memory latestSigA = _sign(partyAKey, latestState);
         bytes memory latestSigB = _sign(partyBKey, latestState);
 
@@ -238,12 +211,8 @@ contract PaymentChannelTest is Test {
     function test_challenge_revertsOnStaleNonce() public {
         uint256 channelId = _openAndJoin(1 ether, 1 ether);
 
-        PaymentChannel.ChannelState memory state1 = PaymentChannel.ChannelState({
-            channelId: channelId,
-            nonce: 3,
-            balanceA: 0.5 ether,
-            balanceB: 1.5 ether
-        });
+        PaymentChannel.ChannelState memory state1 =
+            PaymentChannel.ChannelState({channelId: channelId, nonce: 3, balanceA: 0.5 ether, balanceB: 1.5 ether});
         bytes memory sigA1 = _sign(partyAKey, state1);
         bytes memory sigB1 = _sign(partyBKey, state1);
 
@@ -251,12 +220,8 @@ contract PaymentChannelTest is Test {
         channel.closeUnilateral(state1, sigA1, sigB1);
 
         // attempt to challenge with an older or equal nonce must fail
-        PaymentChannel.ChannelState memory staleChallenge = PaymentChannel.ChannelState({
-            channelId: channelId,
-            nonce: 3,
-            balanceA: 0.9 ether,
-            balanceB: 1.1 ether
-        });
+        PaymentChannel.ChannelState memory staleChallenge =
+            PaymentChannel.ChannelState({channelId: channelId, nonce: 3, balanceA: 0.9 ether, balanceB: 1.1 ether});
         bytes memory sigA2 = _sign(partyAKey, staleChallenge);
         bytes memory sigB2 = _sign(partyBKey, staleChallenge);
 

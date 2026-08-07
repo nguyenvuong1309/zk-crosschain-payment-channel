@@ -25,13 +25,18 @@ contract LightClientVerifierBLSIntegrationTest is Test {
     function setUp() public {
         Groth16Verifier channelStateVerifier = new Groth16Verifier();
         lightClient = new LightClientVerifierBLS();
-        channelB = new PaymentChannel(IChannelStateVerifier(address(channelStateVerifier)), ILightClientVerifier(address(lightClient)));
+        channelB = new PaymentChannel(
+            IChannelStateVerifier(address(channelStateVerifier)), ILightClientVerifier(address(lightClient))
+        );
 
         vm.deal(partyA, 10 ether);
         vm.deal(partyB, 10 ether);
     }
 
-    function _sign(uint256 chainId, uint256 blockNumber, uint256 stateRoot, uint256 participantBitmap) internal returns (bytes memory) {
+    function _sign(uint256 chainId, uint256 blockNumber, uint256 stateRoot, uint256 participantBitmap)
+        internal
+        returns (bytes memory)
+    {
         string[] memory cmd = new string[](6);
         cmd[0] = "node";
         cmd[1] = "../bls-validators/sign.js";
@@ -54,7 +59,11 @@ contract LightClientVerifierBLSIntegrationTest is Test {
             PaymentChannel.ChannelState({channelId: channelId, nonce: 1, balanceA: 0.5 ether, balanceB: 1.5 ether});
 
         uint256 stateRoot = uint256(
-            keccak256(abi.encode(REMOTE_CONTRACT, REMOTE_CHAIN_ID, state.channelId, state.nonce, state.balanceA, state.balanceB))
+            keccak256(
+                abi.encode(
+                    REMOTE_CONTRACT, REMOTE_CHAIN_ID, state.channelId, state.nonce, state.balanceA, state.balanceB
+                )
+            )
         ) % BabyJubJub.Q;
 
         uint256 participantBitmap = 0x07; // validators 0,1,2 — real quorum
@@ -64,7 +73,8 @@ contract LightClientVerifierBLSIntegrationTest is Test {
         vm.prank(partyA);
         channelB.closeWithRemoteAttestation(channelId, REMOTE_CONTRACT, REMOTE_CHAIN_ID, state);
 
-        (,,,, PaymentChannel.Status status, uint256 nonce, uint256 balA, uint256 balB,,,,,) = channelB.channels(channelId);
+        (,,,, PaymentChannel.Status status, uint256 nonce, uint256 balA, uint256 balB,,,,,) =
+            channelB.channels(channelId);
         assertEq(uint256(status), uint256(PaymentChannel.Status.CHALLENGE_PERIOD));
         assertEq(nonce, 1);
         assertEq(balA, 0.5 ether);

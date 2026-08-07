@@ -189,8 +189,9 @@ contract PaymentChannelFormalTest is Test {
         channel.closeUnilateral(openingState, abi.encodePacked(r1, s1, v1), abi.encodePacked(r2, s2, v2));
 
         vm.assume(candidateNonce <= 5);
-        PaymentChannel.ChannelState memory candidate =
-            PaymentChannel.ChannelState({channelId: cid, nonce: candidateNonce, balanceA: balanceA, balanceB: balanceB});
+        PaymentChannel.ChannelState memory candidate = PaymentChannel.ChannelState({
+            channelId: cid, nonce: candidateNonce, balanceA: balanceA, balanceB: balanceB
+        });
 
         vm.prank(caller);
         try channel.challenge(candidate, sigA, sigB) {
