@@ -59,6 +59,7 @@ contract LightClientVerifierBLS {
     error InsufficientQuorum();
     error InvalidAggregateSignature();
     error InvalidSignatureLength();
+    error PaddingBitsMustBeZero();
 
     /// @notice Submits a BLS aggregate signature attesting to
     ///         (chainId, blockNumber, stateRoot), updating
@@ -77,6 +78,15 @@ contract LightClientVerifierBLS {
         bytes calldata aggSig
     ) external {
         if (blockNumber <= trustedBlockNumber[chainId]) revert StaleBlockNumber();
+        // participantBitmap >> NUM_VALIDATORS must be 0 — any set bit past
+        // validator 4 is a "phantom" bit that _aggregatePubkeys (correctly
+        // bounded to NUM_VALIDATORS) ignores but a naive full-uint256
+        // popcount would still count toward THRESHOLD, letting a caller
+        // inflate the apparent participant count without real validators
+        // signing. Same class of bug found + fixed in
+        // LightClientVerifierBLSGeneral(RFC9380).sol — see those contracts'
+        // _checkPaddingBitsZero for the general-N version of this check.
+        if (participantBitmap >> NUM_VALIDATORS != 0) revert PaddingBitsMustBeZero();
         if (_popcount(participantBitmap) < THRESHOLD) revert InsufficientQuorum();
         if (aggSig.length != 256) revert InvalidSignatureLength();
 

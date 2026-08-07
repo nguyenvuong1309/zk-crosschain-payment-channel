@@ -23,10 +23,14 @@ if (!keysJsonPath || !chainIdArg || !blockNumberArg || !stateRootArg || !partici
   process.exit(1);
 }
 
-const keys = JSON.parse(fs.readFileSync(keysJsonPath, "utf8")) as {
-  numValidators: number;
+const keysRaw = JSON.parse(fs.readFileSync(keysJsonPath, "utf8")) as {
+  numValidators?: number;
   validators: { secretKey: string }[];
 };
+// generate_keys.ts's output (keys.json, the original 5-key demo committee)
+// predates the numValidators field generate_keys_general.ts added — fall
+// back to validators.length so this script works against either shape.
+const keys = { ...keysRaw, numValidators: keysRaw.numValidators ?? keysRaw.validators.length };
 const participantCount = Number(participantCountArg);
 if (participantCount < 0 || participantCount > keys.numValidators) {
   throw new Error(`participantCount ${participantCount} out of range [0, ${keys.numValidators}]`);

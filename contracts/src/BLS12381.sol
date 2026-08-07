@@ -16,6 +16,7 @@ pragma solidity ^0.8.24;
 /// y.c1 — Fp2 coordinates).
 library BLS12381 {
     address internal constant G1ADD = address(uint160(0x0B));
+    address internal constant G2ADD = address(uint160(0x0D));
     address internal constant MAP_FP2_TO_G2 = address(uint160(0x11));
     address internal constant PAIRING_CHECK = address(uint160(0x0F));
 
@@ -25,6 +26,13 @@ library BLS12381 {
     function g1Add(bytes memory a, bytes memory b) internal view returns (bytes memory) {
         (bool ok, bytes memory result) = G1ADD.staticcall(abi.encodePacked(a, b));
         if (!ok) revert PrecompileCallFailed(G1ADD);
+        return result;
+    }
+
+    /// @notice Adds two G2 points (256 bytes each).
+    function g2Add(bytes memory a, bytes memory b) internal view returns (bytes memory) {
+        (bool ok, bytes memory result) = G2ADD.staticcall(abi.encodePacked(a, b));
+        if (!ok) revert PrecompileCallFailed(G2ADD);
         return result;
     }
 

@@ -97,4 +97,23 @@ contract LightClientVerifierBLSTest is Test {
         vm.expectRevert(LightClientVerifierBLS.InvalidAggregateSignature.selector);
         lightClient.updateState(CHAIN_ID, 1, 12345, 0x07, aggSig); // claims 0,1,2
     }
+
+    /// @notice Security-review regression test — same phantom-bit-padding
+    ///         bug as LightClientVerifierBLSGeneral.sol
+    ///         (LightClientVerifierBLSGeneralPaddingBitsTest), applied to
+    ///         this contract's `uint256` bitmap (NUM_VALIDATORS=5, so bits
+    ///         5-255 are ALL phantom — even more exploitable than the
+    ///         `bytes`-bitmap version's at-most-7 phantom bits). Only
+    ///         validator 0 genuinely signs; bits 5 and 6 are phantom
+    ///         (no validator 5/6 exists) but would inflate a naive
+    ///         popcount(uint256) to 3 == THRESHOLD. Must now revert
+    ///         PaddingBitsMustBeZero instead of accepting a 1-of-5
+    ///         signature as if it were 3-of-5.
+    function test_updateState_rejectsPhantomBitPadding() public {
+        bytes memory aggSig = _sign(CHAIN_ID, 1, 12345, 0x01); // ONLY validator 0 actually signs
+
+        uint256 exploitBitmap = 0x01 | (1 << 5) | (1 << 6); // = 0x61: bit0 real, bits5/6 phantom
+        vm.expectRevert(LightClientVerifierBLS.PaddingBitsMustBeZero.selector);
+        lightClient.updateState(CHAIN_ID, 1, 12345, exploitBitmap, aggSig);
+    }
 }

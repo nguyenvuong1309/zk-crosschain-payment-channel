@@ -10,18 +10,68 @@
 // Re-run this to refresh the snapshot to a newer block; the frozen file is
 // committed to git either way (it's real historical data, not a secret).
 //
+// The finalized root + genesis_validators_root this snapshot anchors to
+// now come from `getTrustlessCheckpoint()` (trustless_bootstrap.ts,
+// Milestone 5's last open item) — cross-checked against 3 independent
+// beacon node operators instead of trusted from whichever single node this
+// script happens to talk to. See that file's header comment for why.
+//
 // Usage: npx tsx capture_real_snapshot.ts [beaconApiUrl]
 
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { createHash } from "crypto";
 import { bls12_381 } from "@noble/curves/bls12-381.js";
+import { getTrustlessCheckpoint } from "./trustless_bootstrap.js";
+
+function sha256(a: Uint8Array, b: Uint8Array): Uint8Array {
+  return new Uint8Array(createHash("sha256").update(a).update(b).digest());
+}
+function hexToBytes(hex: string): Uint8Array {
+  return new Uint8Array(Buffer.from(hex.startsWith("0x") ? hex.slice(2) : hex, "hex"));
+}
+function bytesToHex(b: Uint8Array): string {
+  return "0x" + Buffer.from(b).toString("hex");
+}
+function uint64Chunk(v: bigint): Uint8Array {
+  const buf = new Uint8Array(32);
+  new DataView(buf.buffer).setBigUint64(0, v, true);
+  return buf;
+}
+function merkleize(chunks: Uint8Array[]): Uint8Array {
+  let layer = chunks;
+  let size = 1;
+  while (size < layer.length) size *= 2;
+  const zero32 = new Uint8Array(32);
+  while (layer.length < size) layer = [...layer, zero32];
+  while (layer.length > 1) {
+    const next: Uint8Array[] = [];
+    for (let i = 0; i < layer.length; i += 2) next.push(sha256(layer[i]!, layer[i + 1]!));
+    layer = next;
+  }
+  return layer[0] ?? new Uint8Array(32);
+}
+
+/// hash_tree_root(BeaconBlockHeader) — same algorithm as
+/// sync_committee_probe.ts / dump_signing_root.ts, duplicated here (small,
+/// self-contained scripts by this repo's convention) to independently
+/// confirm the light-client node's bootstrap.header really IS the header
+/// for the trustless-checked finalizedRoot, not a mismatched one.
+function hashTreeRootHeader(h: { slot: string; proposer_index: string; parent_root: string; state_root: string; body_root: string }): Uint8Array {
+  return merkleize([
+    uint64Chunk(BigInt(h.slot)),
+    uint64Chunk(BigInt(h.proposer_index)),
+    hexToBytes(h.parent_root),
+    hexToBytes(h.state_root),
+    hexToBytes(h.body_root),
+  ]);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BEACON_API = process.argv[2] ?? "https://ethereum-beacon-api.publicnode.com";
 
-async function fetchJson(p: string): Promise<any> {
-  const res = await fetch(`${BEACON_API}${p}`);
+async function fetchJson(baseUrl: string, p: string): Promise<any> {
+  const res = await fetch(`${baseUrl}${p}`);
   if (!res.ok) throw new Error(`${p} -> HTTP ${res.status} ${await res.text()}`);
   return res.json();
 }
@@ -42,13 +92,27 @@ function compressedToEip2537(compressedHex: string): string {
 }
 
 async function main() {
-  console.error(`[capture] beacon API: ${BEACON_API}`);
+  const checkpoint = await getTrustlessCheckpoint();
+  const beaconApi = checkpoint.lightClientNodeUrl;
+  console.error(`[capture] trustless-checked finalized root: ${checkpoint.finalizedRoot}`);
+  console.error(`[capture] fetching light-client payload from: ${beaconApi}`);
 
-  const genesis = (await fetchJson("/eth/v1/beacon/genesis")).data;
-  const fork = (await fetchJson("/eth/v1/beacon/states/head/fork")).data;
-  const finalizedRoot: string = (await fetchJson("/eth/v1/beacon/blocks/finalized/root")).data.root;
-  const bootstrap = (await fetchJson(`/eth/v1/beacon/light_client/bootstrap/${finalizedRoot}`)).data;
-  const update = (await fetchJson("/eth/v1/beacon/light_client/finality_update")).data;
+  const fork = (await fetchJson(beaconApi, "/eth/v1/beacon/states/head/fork")).data;
+  const bootstrap = (await fetchJson(beaconApi, `/eth/v1/beacon/light_client/bootstrap/${checkpoint.finalizedRoot}`)).data;
+  const update = (await fetchJson(beaconApi, "/eth/v1/beacon/light_client/finality_update")).data;
+
+  // Defense in depth: the light-client node was asked for the bootstrap AT
+  // the trustless-checked finalizedRoot, but nothing so far confirmed it
+  // actually returned a header that hashes to that exact root rather than
+  // some other one — recompute hash_tree_root(bootstrap.header.beacon)
+  // independently and require it to match.
+  const returnedHeaderRoot = bytesToHex(hashTreeRootHeader(bootstrap.header.beacon));
+  if (returnedHeaderRoot.toLowerCase() !== checkpoint.finalizedRoot.toLowerCase()) {
+    throw new Error(
+      `light-client node returned a header for a DIFFERENT root than requested: expected ${checkpoint.finalizedRoot}, got ${returnedHeaderRoot}`
+    );
+  }
+  console.error(`[capture] bootstrap.header hash_tree_root matches the trustless-checked finalized root — confirmed`);
 
   const committee = bootstrap.current_sync_committee;
   console.error(`[capture] committee size: ${committee.pubkeys.length}, converting to EIP-2537...`);
@@ -56,10 +120,11 @@ async function main() {
   const aggregatePubkeyEip2537 = compressedToEip2537(committee.aggregate_pubkey);
 
   const snapshot = {
-    note: "REAL Ethereum mainnet light-client snapshot (Milestone 5 step 6) — frozen at capture time so contracts/test/LightClientVerifierBLSReal.t.sol has reproducible, non-flaky real data. Re-run capture_real_snapshot.ts to refresh.",
+    note: "REAL Ethereum mainnet light-client snapshot (Milestone 5 step 6) — frozen at capture time so contracts/test/LightClientVerifierBLSReal.t.sol has reproducible, non-flaky real data. Re-run capture_real_snapshot.ts to refresh. genesisValidatorsRoot/finalizedRoot below are trustless-checked (Milestone 5's last item — see trustless_bootstrap.ts), not trusted from one node.",
     capturedAt: new Date().toISOString(),
-    beaconApi: BEACON_API,
-    genesisValidatorsRoot: genesis.genesis_validators_root,
+    beaconApi,
+    genesisValidatorsRoot: checkpoint.genesisValidatorsRoot,
+    trustlessCheckedFinalizedRoot: checkpoint.finalizedRoot,
     forkCurrentVersion: fork.current_version,
     forkEpoch: fork.epoch,
     bootstrapHeaderStateRoot: bootstrap.header.beacon.state_root,

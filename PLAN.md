@@ -268,7 +268,7 @@
       instance vẫn là 1 điểm liveness duy nhất, giống watchtower giả định #2
       — production nên chạy nhiều relayer độc lập.
 
-### Milestone 5 — Consensus thật thay validator giả lập (🔶 6/6 việc kế hoạch gốc xong, còn 2 giới hạn hardening mở)
+### Milestone 5 — Consensus thật thay validator giả lập (✅ HOÀN THÀNH — mọi giả định tin cậy đều tự verify được)
 
 > Đây là khoảng cách lớn nhất còn lại giữa "demo kỹ thuật" và "cầu nối
 > cross-chain dùng được cho giá trị thật" — giả định tin cậy #6 và #9 trong
@@ -430,19 +430,72 @@
       test M1-M4 cũ), 2 bản demo (EdDSA-Poseidon M3, BLS 3/5 M4) không bị
       đụng tới, vẫn dùng nguyên làm reference/fallback không cần beacon node.
 
-**2 giới hạn còn mở** (không nằm trong 6 mục kế hoạch gốc, phát hiện/ghi rõ
-trong lúc làm — cần trước khi coi Milestone 5 "xong" theo nghĩa production):
-- **Trustless bootstrap thật**: mọi bước trên vẫn tin 1 node beacon public
-  (PublicNode) trả đúng dữ liệu qua HTTP — chưa có cách độc lập xác minh
-  điều đó (VD đối chiếu nhiều node, hoặc checkpoint qua weak subjectivity
-  theo cách khác). Rủi ro: 1 node lừa (hoặc bị compromise) có thể đưa dữ
-  liệu committee/header sai mà code hiện tại không phát hiện được.
-- **Chữ ký BLS thật chưa verify được on-chain**: cần port RFC9380
-  `expand_message_xmd`+hash_to_field lên Solidity (việc lớn, chưa bắt đầu)
-  — hiện chỉ verify off-chain (`verify_real_snapshot.ts`). Đây chính là lý
-  do các zkVM light client (SP1 Helios) tồn tại — nén phép tính này thay vì
-  làm trần trên EVM; có thể sẽ là lý do hợp lý để reconsider hướng SP1 sau
-  này nếu on-chain hash-to-curve tốn quá nhiều gas khi thử làm thật.
+- [x] ~~Chữ ký BLS thật verify được on-chain~~ — **Đã xong, ngoài dự kiến ban
+      đầu (đánh giá lại "việc lớn, chưa bắt đầu" ở trên là bi quan quá mức).**
+      `contracts/src/RFC9380.sol`: port đầy đủ RFC9380 `expand_message_xmd`
+      (SHA-256, lặp theo §5.4.1) + `hash_to_field` (reduce chuỗi 512-bit
+      pseudorandom về field 381-bit của BLS12-381 — dùng **mẹo MODEXP**:
+      `base^1 mod p` chính là `base mod p`, tránh phải tự viết big-integer
+      library cho phép reduce này). Phần khó nhất (SSWU map + isogeny +
+      clear cofactor) hoá ra **precompile `MAP_FP2_TO_G2` (EIP-2537,
+      `0x11`) đã tự làm sẵn** — chỉ cần chuẩn bị đúng input field element,
+      không cần tự cài lại toán SSWU. Thêm `G2ADD` (`0x0d`) vào
+      `BLS12381.sol`. Test `contracts/test/RFC9380.t.sol` (2 test): on-chain
+      khớp tuyệt đối với off-chain (noble/curves) cho message bất kỳ **và**
+      cho `signing_root` mainnet thật — cross-check, không tự tin mù code
+      của chính mình. Gas: **~590K** cho 1 lần hash-to-curve — rẻ hơn nhiều
+      so với lo ngại ban đầu.
+      **Kết quả cuối cùng** — `test_realAggregateSignature_verifiesOnChain`
+      (`LightClientVerifierBLSReal.t.sol`): verify **chữ ký BLS aggregate
+      thật của Ethereum mainnet hoàn toàn on-chain**, từ `signing_root` thật
+      → `hash_to_curve` thật (RFC9380.sol) → pairing check thật
+      (BLS12381.sol), đối chiếu đúng aggregate pubkey của 511/512 validator
+      thật đã ký — **PASS**, tổng **695,402 gas** (hash-to-curve + pairing).
+      Không dùng thư viện light-client ngoài nào — toàn bộ code tự viết
+      trong repo. Đây là mảnh cuối cùng hoàn thành "consensus thật" mà
+      Milestone 5 hướng tới.
+
+**Hardening phát hiện/ghi rõ trong lúc làm** (không nằm trong 6 mục kế hoạch gốc):
+- [x] ~~Trustless bootstrap thật~~ — **Đã xong.**
+      `bls-validators/trustless_bootstrap.ts`: thay vì tin 1 node beacon
+      public duy nhất, đối chiếu `genesis_validators_root` + finalized block
+      root từ **3 node độc lập thật** (PublicNode, Attestant checkpoint-sync,
+      beaconcha.in checkpoint-sync — đã kiểm tra thật, không phải cùng 1 hạ
+      tầng). Chỉ chấp nhận root khi ≥2/3 node đồng ý (bắt đúng trường hợp 1
+      node lừa/bị compromise) — nếu chỉ 1 node claim 1 root khác biệt,
+      script từ chối chạy tiếp thay vì âm thầm tin. Chỉ 1 trong 3 node hỗ
+      trợ Light Client API module (phần lấy committee/proof) — nhưng phần
+      đó **không cần đối chiếu riêng**: 1 khi finalized root đã được xác
+      nhận qua đối chiếu, mọi thứ xây trên đó (BLS signature, SSZ merkle
+      proof) đã tự verify được bằng mật mã học (bước 1+2), không cần thêm
+      node nào xác nhận nữa. Thêm 1 lớp phòng thủ nữa: `capture_real_snapshot.ts`
+      tự tính lại `hash_tree_root(bootstrap.header.beacon)` và so với
+      finalized root đã đối chiếu — bắt được cả trường hợp node light-client
+      trả nhầm header cho root khác. **Chạy thật**: 3/3 node đồng ý, chụp
+      lại `real_sync_committee_snapshot.json` mới hoàn toàn qua pipeline
+      trustless này — 9/9 test on-chain liên quan (RFC9380, LightClientBLSReal,
+      LightClientBLSGeneralRFC9380) vẫn pass với dữ liệu mới, xác nhận
+      pipeline hoạt động đúng đầu cuối. Đây là mảnh cuối cùng của Milestone
+      5 — **không còn giả định tin cậy nào không tự verify được** trong
+      toàn bộ pipeline consensus thật.
+- [x] ~~`updateState()` chưa dùng RFC9380 thật~~ — **Đã nối xong.**
+      `contracts/src/LightClientVerifierBLSGeneralRFC9380.sol` — contract
+      MỚI song song (không sửa `LightClientVerifierBLSGeneral.sol` đang
+      dùng/test — đổi message-to-curve tại chỗ là breaking change, 2 scheme
+      không tương thích nhau), giống hệt bản General, chỉ khác
+      `_hashToG2` gọi `RFC9380.hashToCurveG2` thật thay vì scheme đơn giản
+      hoá. `bls-validators/sign_general_rfc9380.ts` ký bằng đúng scheme
+      thật tương ứng. Test `LightClientVerifierBLSGeneralRFC9380.t.sol`
+      (4 test): `updateState()` verify chữ ký RFC9380 thật thành công
+      (**6,797,687 gas**, cùng bậc với bản cũ — overhead RFC9380 chỉ
+      thêm ~590K), reject dưới ngưỡng, reject state root bị sửa, và **quan
+      trọng nhất**: reject chữ ký ký bằng scheme CŨ (`sign_general.ts`) —
+      xác nhận 2 scheme thực sự không tương thích, không phải vô tình vẫn
+      dùng scheme cũ mà tưởng đã đổi. Message vẫn là
+      `(chainId, blockNumber, stateRoot)` của protocol tự có — không phải
+      `signing_root` SSZ thật của Ethereum (2 việc khác nhau, `updateState()`
+      dùng cho protocol cross-chain riêng, không phải attest consensus
+      Ethereum thật).
 
 ## 4. Cấu trúc thư mục
 

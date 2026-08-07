@@ -73,6 +73,7 @@ contract LightClientVerifierBLSGeneral {
     error NoValidators();
     error InvalidPubkeyLength();
     error BitmapLengthMismatch();
+    error PaddingBitsMustBeZero();
     error StaleBlockNumber();
     error InsufficientQuorum();
     error InvalidAggregateSignature();
@@ -136,6 +137,7 @@ contract LightClientVerifierBLSGeneral {
         if (!finalized) revert NotFinalized();
         if (participantBitmap.length != (numValidators + 7) / 8) revert BitmapLengthMismatch();
         if (blockNumber <= trustedBlockNumber[chainId]) revert StaleBlockNumber();
+        _checkPaddingBitsZero(participantBitmap);
         if (_popcount(participantBitmap) < threshold) revert InsufficientQuorum();
         if (aggSig.length != 256) revert InvalidSignatureLength();
 
@@ -178,13 +180,35 @@ contract LightClientVerifierBLSGeneral {
         return (uint8(bitmap[i >> 3]) >> (i & 7)) & 1 == 1;
     }
 
-    function _popcount(bytes calldata bitmap) internal pure returns (uint256 count) {
-        for (uint256 i = 0; i < bitmap.length; i++) {
-            uint8 b = uint8(bitmap[i]);
-            while (b != 0) {
-                count += b & 1;
-                b >>= 1;
-            }
+    /// @dev Bounded to `[0, numValidators)`, mirroring `_aggregatePubkeys`'s
+    ///      loop exactly — NOT a plain "count every set bit in the byte
+    ///      array". `participantBitmap` is `ceil(numValidators/8)` bytes,
+    ///      so whenever `numValidators` isn't a multiple of 8 the last byte
+    ///      has "phantom" bit positions past `numValidators - 1` that don't
+    ///      correspond to any registered validator. A popcount over the
+    ///      full byte array would let those phantom bits inflate the
+    ///      apparent participant count past `threshold` while
+    ///      `_aggregatePubkeys` (correctly bounded) still only sums the
+    ///      real validators' pubkeys underneath — accepting a signature
+    ///      from fewer than `threshold` real validators. Security review
+    ///      finding, fixed here; see `_checkPaddingBitsZero` for the
+    ///      complementary explicit rejection of malformed bitmaps.
+    function _popcount(bytes calldata bitmap) internal view returns (uint256 count) {
+        for (uint256 i = 0; i < numValidators; i++) {
+            if (_bitSet(bitmap, i)) count++;
+        }
+    }
+
+    /// @dev Defense in depth alongside `_popcount`'s fix above: explicitly
+    ///      reject any bitmap with a phantom bit (index >= numValidators)
+    ///      set, rather than silently ignoring it. Without this, a
+    ///      well-formed-looking bitmap with garbage padding bits would
+    ///      still be accepted (just no longer exploitable) — better to
+    ///      fail loudly on malformed input than tolerate it silently.
+    function _checkPaddingBitsZero(bytes calldata bitmap) internal view {
+        uint256 totalBits = bitmap.length * 8;
+        for (uint256 i = numValidators; i < totalBits; i++) {
+            if (_bitSet(bitmap, i)) revert PaddingBitsMustBeZero();
         }
     }
 }

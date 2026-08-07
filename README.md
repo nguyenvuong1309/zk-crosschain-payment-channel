@@ -24,27 +24,26 @@ cho giả định tin cậy và giới hạn của demo — đọc trước khi 
 | Formal verification (Halmos, 4 property đã chứng minh) | ✅ 1 phần — `contracts/test/PaymentChannel.formal.t.sol` |
 | Halo2 migration reference (chứng minh khả thi, chưa full parity) | ✅ Reference — `circuits-halo2/` |
 | Audit circuit `channel_state.circom` (tìm + vá 1 lỗi thật: thiếu range-check nonce) | ✅ 1 vòng — `docs/threat-model.md` #3 |
-| Security review `contracts/src/` | ✅ 1 vòng, không phát hiện lỗ hổng mới |
+| Security review `contracts/src/` | ✅ 2 vòng — vòng 2 (code Milestone 5) tìm + vá 1 lỗi thật: bypass ngưỡng quorum qua "phantom bit" trong `participantBitmap`, xem `docs/threat-model.md` #E |
 | BLS12-381 validator thật (khoá + aggregate signature + pairing check thật qua precompile EIP-2537) | ✅ Xong — `bls-validators/`, `contracts/src/LightClientVerifierBLS.sol` |
 | Relayer watch-loop tự động (không cần gọi tay sau mỗi update) | ✅ Xong — `relayer/src/watch.ts`, `pnpm run watch` |
 | Audit bảo mật độc lập bởi bên thứ 3 | ⏳ Cần nguồn lực ngoài, chưa làm |
 | Sync committee Ethereum thật (SSZ, beacon header) | 🔶 Đang làm — xem Milestone 5, `PLAN.md` |
 
-**Milestone 5 (6/6 việc kế hoạch gốc xong, còn 2 giới hạn hardening mở)** —
-thay validator giả lập bằng sync committee Ethereum thật: verify off-chain
-thành công cả chữ ký BLS aggregate **thật** lẫn SSZ merkle proof **thật**
-của mainnet; `LightClientVerifierBLSGeneral.sol` verify quorum **342-of-512
-thật**; `contracts/src/SSZ.sol` verify merkle proof on-chain (root khớp
-chính xác off-chain) — gas thật đo được dùng để **quyết định xong on-chain
-thay vì cần circuit riêng**; và đã **đăng ký + verify merkle proof của
-đúng 512-key committee mainnet thật on-chain**
-(`contracts/test/LightClientVerifierBLSReal.t.sol`, dữ liệu đóng băng từ
-snapshot mainnet thật). Còn mở: chữ ký BLS thật chưa verify được on-chain
-(cần RFC9380 hash-to-curve trên Solidity, việc lớn riêng) và chưa có
-"trustless bootstrap" (vẫn tin 1 node public). Chi tiết đầy đủ: `PLAN.md`
-Milestone 5.
+**Milestone 5 (✅ HOÀN THÀNH — mọi giả định tin cậy đều tự verify được)** —
+thay validator giả lập bằng sync committee Ethereum thật: đăng ký
+**512-key committee mainnet thật** vào contract (quorum 342-of-512 thật),
+verify **merkle proof thật on-chain** (`contracts/src/SSZ.sol`), verify
+**chữ ký BLS aggregate thật của mainnet hoàn toàn on-chain**
+(`contracts/src/RFC9380.sol`, port đầy đủ RFC9380 hash-to-curve, pairing
+check thật 511/512 validator, 695K gas), `updateState()` thật sự dùng đúng
+scheme này (`LightClientVerifierBLSGeneralRFC9380.sol`), và **trustless
+bootstrap** — đối chiếu `genesis_validators_root`/finalized root từ **3
+beacon node độc lập thật**, chỉ tin khi ≥2/3 đồng ý (`bls-validators/trustless_bootstrap.ts`)
+— không còn tin mù 1 node duy nhất. Không dùng thư viện light-client ngoài
+nào. Chi tiết đầy đủ: `PLAN.md` Milestone 5.
 
-55 test Foundry pass (`forge test`, cần `--ffi`), cộng thêm test hình thức
+65 test Foundry pass (`forge test`, cần `--ffi`), cộng thêm test hình thức
 Halmos (`contracts/test/PaymentChannel.formal.t.sol`) và test Rust cho
 circuit Halo2 (`circuits-halo2/`, `cargo test`).
 

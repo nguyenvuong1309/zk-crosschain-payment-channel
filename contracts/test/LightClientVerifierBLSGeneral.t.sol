@@ -142,3 +142,91 @@ contract LightClientVerifierBLSGeneralTest is Test {
         fresh.addValidators(empty);
     }
 }
+
+/// @notice Security-review regression test (see PLAN.md/threat-model): for
+///         a committee size NOT a multiple of 8 (512 in the suite above
+///         conveniently is, and never exercised this), `participantBitmap`
+///         has "phantom" bit positions beyond `numValidators - 1` that
+///         don't correspond to any registered validator.
+///         `LightClientVerifierBLSGeneral._popcount` previously counted
+///         ALL bits in the byte array (not bounded to `numValidators`,
+///         unlike `_aggregatePubkeys`), letting a caller set phantom bits
+///         to inflate the apparent participant count past `threshold`
+///         while the actual aggregate pubkey/signature only needed to
+///         match far fewer REAL validators — bypassing the light client's
+///         2/3-supermajority safety guarantee. Fixed by bounding
+///         `_popcount` to `[0, numValidators)` and explicitly rejecting any
+///         set phantom bit (`_checkPaddingBitsZero`). Uses the pre-existing
+///         5-key demo committee (`bls-validators/keys.json`,
+///         `NUM_VALIDATORS=5` is NOT a multiple of 8 — exactly the
+///         vulnerable case).
+contract LightClientVerifierBLSGeneralPaddingBitsTest is Test {
+    LightClientVerifierBLSGeneral lightClient;
+    uint256 constant CHAIN_ID = 31337;
+    string constant KEYS_PATH = "../bls-validators/keys.json"; // N=5, NOT a multiple of 8
+
+    function setUp() public {
+        lightClient = new LightClientVerifierBLSGeneral();
+
+        string[] memory cmd = new string[](3);
+        cmd[0] = "../bls-validators/node_modules/.bin/tsx";
+        cmd[1] = "../bls-validators/dump_pubkeys.ts";
+        cmd[2] = KEYS_PATH;
+        bytes[] memory pubkeys = vm.parseJsonBytesArray(string(vm.ffi(cmd)), ".pubkeys");
+        assertEq(pubkeys.length, 5);
+
+        lightClient.addValidators(pubkeys);
+        lightClient.finalize();
+        assertEq(lightClient.numValidators(), 5);
+        assertEq(lightClient.threshold(), 4, "ceil(2*5/3) - sanity check this test's exploit math below");
+    }
+
+    /// @notice The exploit this test proves is now blocked: a signature
+    ///         from only 1-of-5 REAL validators, padded with 3 phantom
+    ///         bits (indices 5,6,7 — 1 byte = 8 bits, only 5 are real) to
+    ///         make the naive popcount read 4 (== threshold). Before the
+    ///         fix, this would have passed the InsufficientQuorum check
+    ///         and then the pairing check too (since the aggregate pubkey
+    ///         is correctly built from just the 1 real bit — the exploit
+    ///         doesn't need to forge a signature, only inflate the COUNT).
+    function test_updateState_rejectsPhantomBitPadding() public {
+        (bytes memory aggSig,) = _sign(CHAIN_ID, 1, 12345, 1); // genuinely signed by only validator 0
+
+        // bit0 = 1 (real, validator 0 signed) | bits5,6,7 = 1 (phantom, no
+        // validator 5/6/7 exists) = 0b1110_0001 = 0xE1. Naive full-byte
+        // popcount(0xE1) = 4 = threshold; _aggregatePubkeys only sees bit0.
+        bytes memory exploitBitmap = hex"e1";
+
+        vm.expectRevert(LightClientVerifierBLSGeneral.PaddingBitsMustBeZero.selector);
+        lightClient.updateState(CHAIN_ID, 1, 12345, exploitBitmap, aggSig);
+    }
+
+    /// @notice A HONEST bitmap with only real bits set (no padding) for
+    ///         the same under-threshold signer count must still correctly
+    ///         hit InsufficientQuorum, not PaddingBitsMustBeZero — proves
+    ///         the fix didn't just start rejecting everything.
+    function test_updateState_stillRevertsInsufficientQuorum_withoutPadding() public {
+        (bytes memory aggSig, bytes memory bitmap) = _sign(CHAIN_ID, 1, 12345, 1); // 1 real signer, honest bitmap (bit0 only)
+        vm.expectRevert(LightClientVerifierBLSGeneral.InsufficientQuorum.selector);
+        lightClient.updateState(CHAIN_ID, 1, 12345, bitmap, aggSig);
+    }
+
+    function _sign(uint256 chainId, uint256 blockNumber, uint256 stateRoot, uint256 participantCount)
+        internal
+        returns (bytes memory aggSig, bytes memory participantBitmap)
+    {
+        string[] memory cmd = new string[](7);
+        cmd[0] = "../bls-validators/node_modules/.bin/tsx";
+        cmd[1] = "../bls-validators/sign_general.ts";
+        cmd[2] = KEYS_PATH;
+        cmd[3] = vm.toString(chainId);
+        cmd[4] = vm.toString(blockNumber);
+        cmd[5] = vm.toString(stateRoot);
+        cmd[6] = vm.toString(participantCount);
+
+        bytes memory result = vm.ffi(cmd);
+        string memory json = string(result);
+        aggSig = vm.parseJsonBytes(json, ".aggSig");
+        participantBitmap = vm.parseJsonBytes(json, ".participantBitmap");
+    }
+}

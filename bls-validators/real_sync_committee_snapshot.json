@@ -1,18 +1,19 @@
 {
-  "note": "REAL Ethereum mainnet light-client snapshot (Milestone 5 step 6) — frozen at capture time so contracts/test/LightClientVerifierBLSReal.t.sol has reproducible, non-flaky real data. Re-run capture_real_snapshot.ts to refresh.",
-  "capturedAt": "2026-08-07T07:46:23.077Z",
+  "note": "REAL Ethereum mainnet light-client snapshot (Milestone 5 step 6) — frozen at capture time so contracts/test/LightClientVerifierBLSReal.t.sol has reproducible, non-flaky real data. Re-run capture_real_snapshot.ts to refresh. genesisValidatorsRoot/finalizedRoot below are trustless-checked (Milestone 5's last item — see trustless_bootstrap.ts), not trusted from one node.",
+  "capturedAt": "2026-08-07T08:39:01.179Z",
   "beaconApi": "https://ethereum-beacon-api.publicnode.com",
   "genesisValidatorsRoot": "0x4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95",
+  "trustlessCheckedFinalizedRoot": "0x5a1ebc7a6f918c479efff8b21fa15e086745dcc49862e0710228f980cb6ea555",
   "forkCurrentVersion": "0x06000000",
   "forkEpoch": "411392",
-  "bootstrapHeaderStateRoot": "0xc46dab8c46217720903446685c05d3a1e3ff4f941cfb50f54d7203a8ac742ecd",
+  "bootstrapHeaderStateRoot": "0xe7ef85d3d5954d5ab447db2dc62cd83440eb3ad0d306c1ff146453a1c9860f0b",
   "currentSyncCommitteeBranch": [
     "0x244d5e3472844e37102a5352e770077ea933dd9bd7461a0d7a142d466df6bd42",
-    "0x3466f0f75b4bd2a278e03fc49197d359f54ff3c6612eb8a757f6f3a2cd441729",
-    "0x0a24c1479c15a7ff45f1f2b28c848cf86bccdb2171f6b7b5abc6bbbd4686ab86",
-    "0xd6a9aaa30b0b6a6964eb0df7eea8944fd84bd54bac33022af0bd364704eaef1b",
-    "0x2cc64bd6ab83ca3b68adac0d7a79b07b2f71ee77fe2ad9978c32525216d0f5f4",
-    "0x4df45f1f702c04236347de1f617845747074570f760ab7206de52e035e51b572"
+    "0x213f442ae44599086387fd85401cf6111ec7ae6e2e546bbe768b8a91c60dfa43",
+    "0x6024ff3f28f826a1dbdfde0b9ce4f054959dd1cd84e86094e94406beb7aadeb1",
+    "0xebd2d11292e62ba79ea812dadaa5d6aab8c7d5517b1e1c3612d3ffa39d4cd000",
+    "0xf2ee3bb7ade1d2d7235828f24238a5954b63e834c6ec73252060251af5e4aa92",
+    "0x9634b6da17e5332f98822baec0c0cd1ae67b639283eb775c51c5a857a4a53d31"
   ],
   "committee": {
     "pubkeysCompressed": [
@@ -1047,14 +1048,14 @@
     "aggregatePubkeyEip2537": "0x000000000000000000000000000000000ef1cc65bcd330a75a63ca46cda488b760bc87e37cb70a985efff98e9a93e488c232b5ca1adc7847a84f0be7949cffcd000000000000000000000000000000000b872007c7c5406ae6c570db326f70f4b214bab7fb7c35064b4ae3cfd680afa3d2c61a2b108fac18fb9f6033d26fb32c"
   },
   "attestedHeader": {
-    "slot": "14938728",
-    "proposer_index": "1425676",
-    "parent_root": "0x1819f5cbe6aec5a8a1bb95b60ace3e8026b12bf80c6520fe7eaf6d50e8551e6c",
-    "state_root": "0x45507a05f10d4c355b0ecc00c74d2fb37455d93eddb5830806629072bd5abaad",
-    "body_root": "0x6582ae165aeaa67f6677bf193dd612da392011d6d1a5862419b4957b43fb1f29"
+    "slot": "14938992",
+    "proposer_index": "667479",
+    "parent_root": "0x3707a9d9ae33cda4979c4d11463aaf20dacab245f788828e258bad99c4bf0949",
+    "state_root": "0x82de3e404c7c468e676ae3763494c88d0031d5fdbf359556f6cee8eb4e0fca0b",
+    "body_root": "0xa164225718d269f971c77c032b84e9e82e1b198ecdac402bb2b90ec509e6107a"
   },
   "syncAggregate": {
-    "participationBitmapSsz": "0xfffffffffffffffffffffffffffffffffffffffffffffffff7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    "signature": "0xa58abb38f14c51a342426c5d1feb6151869295336c79cb29553a914e3c2e443bf0bdd05b2e1b25c005c0ed3832a03cf60aafb4fc9a5518808f237775c5d00dd35d0180288cc2944e55d7fdbb7ac549c5b23d950ffbc7f88faab29000f5eac138"
+    "participationBitmapSsz": "0xfffffffffffffffffffffffffffffffffffffffffffffffff7ffffffffffffffffffffffffffffffefffffffffffffffffffffffffffffffffffffffffffffff",
+    "signature": "0x8aea1b7f535a4192826b1bd7e557a367ca28a3b16c87c37192009e1a9cbbc45623449eedfe17ffcbab072f19eefaa6e61883135a8624b151ec1c74d7f42e80b4afe09635d7f2aaa8968d9ae05389a1f4c16cc9e4c9ef17a0b87ee5436d0137b0"
   }
 }
