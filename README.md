@@ -138,8 +138,20 @@ daemon subscribe sự kiện đóng/challenge kênh trên chain nguồn và tự
 ngay khi có state mới — không cần gọi `index.ts` tay sau mỗi update. Vá
 giả định tin cậy #7 trong `docs/threat-model.md`.
 
+**Relay 2 chiều (sau M4)**: cả `chainA` và `chainB` giờ đều có
+`LightClientVerifier` riêng (`chains.config.json`, cả 2 entry
+`"lightClient": true`) — không còn giới hạn A→B duy nhất như bản demo
+Milestone 3 ban đầu. `pnpm run watch` không tham số tự theo dõi **cả 2
+chiều đồng thời** (mọi cặp chain có light client); truyền `fromChain
+toChain` tường minh để giới hạn 1 chiều. Đã chạy thật `relayer/src/e2e_demo.ts`
+mở rộng: kênh 1 mở trên A, relay + settle sang B; kênh 2 mở trên B, relay +
+settle ngược sang A — cùng 1 cơ chế, cả 2 chiều đều dùng
+`LightClientVerifier` độc lập thật của chain đó, không phải tham số relay
+linh hoạt giả tạo.
+
 Xem `chains/README.md` và `PLAN.md` Milestone 3 cho chi tiết luồng và giới
-hạn đã biết (relay 1 chiều, channelId giả định trùng giữa 2 chain).
+hạn còn lại (channelId giả định trùng giữa 2 chain trong demo — đơn giản
+hoá, không phải yêu cầu kiến trúc).
 
 ## Demo watchtower (M4)
 

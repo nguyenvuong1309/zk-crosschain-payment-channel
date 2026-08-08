@@ -21,6 +21,23 @@ import { relayChannelState, loadDeployment } from "./index";
 // Anvil's well-known default accounts #0/#1 — local demo only.
 const PARTY_A_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const PARTY_B_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+// relayChannelState() defaults RELAYER_PRIVATE_KEY to this SAME value as
+// PARTY_B_KEY (see index.ts) when unset — fine for a ONE-directional relay,
+// but this demo relays BOTH directions, and partyB already has its own
+// NonceManager-tracked wallet(s) on both chains (partyBOnA/partyBOnB
+// below). Reusing partyB's key for the out-of-band relay tx too means that
+// tx's nonce is invisible to whichever NonceManager was created for partyB
+// on the DESTINATION chain, desyncing it from the chain's real nonce for
+// every send after — hit exactly this running Part 2 below (Chain B->A)
+// while writing this demo: partyBOnA's cached nonce went stale the moment
+// the B->A relay tx (from the same key, but a separate plain wallet,
+// bypassing partyBOnA's NonceManager entirely) landed on chain A first.
+// Anvil's well-known account #2 — distinct from both parties — sidesteps
+// this by construction, not by getting lucky with ordering (Part 1 above
+// happened not to hit it only because partyBOnB's first-ever send came
+// AFTER that direction's relay tx).
+const RELAYER_KEY = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
+process.env.RELAYER_PRIVATE_KEY = RELAYER_KEY;
 
 const DEPOSIT_A = ethers.parseEther("1");
 const DEPOSIT_B = ethers.parseEther("1");
@@ -132,8 +149,77 @@ async function main() {
   // partyB paid this tx's gas out of the same balance being checked — add it back.
   await assertEqual("partyB payout on Chain B (net of its own withdraw() gas)", balBAfter - balBBefore + gasCost, state.balanceB);
 
-  console.error("\nEnd-to-end cross-chain settle succeeded: Chain A's channel state (0.3/1.7 ETH), reached via a");
-  console.error("real consensus_proof.circom proof + LightClientVerifier, produced an identical payout on Chain B.");
+  console.error("\nChain A -> Chain B settle succeeded: Chain A's channel state (0.3/1.7 ETH), reached via a real");
+  console.error("consensus_proof.circom proof + LightClientVerifier, produced an identical payout on Chain B.");
+
+  // ---------------------------------------------------------------------
+  // Part 2: the SAME mechanism, the OTHER direction — Chain B -> Chain A.
+  // Proves this isn't just "the relayer's fromChain/toChain params are
+  // flexible" but that chainA genuinely has its own LightClientVerifier
+  // and can accept remote-attested state, exactly as chainB does above
+  // (see chains.config.json — both chains set "lightClient": true).
+  // ---------------------------------------------------------------------
+  console.error("\n=== Part 2: relaying Chain B -> Chain A (the reverse direction) ===");
+
+  console.error("--- Step 7: open + join a SECOND channel on Chain B ---");
+  tx = await (paymentChannelB.connect(partyAOnB) as Contract).open!(partyBAddress, DEPOSIT_A, 0, 0, 0, 0, 0, { value: DEPOSIT_A });
+  receipt = await tx.wait();
+  const openedEventB2 = receipt.logs.map((l: any) => paymentChannelB.interface.parseLog(l)).find((e: any) => e && e.name === "ChannelOpened");
+  const channelIdB2: bigint = openedEventB2.args.channelId;
+  console.error(`  Chain B channelId = ${channelIdB2}`);
+  tx = await (paymentChannelB.connect(partyBOnB) as Contract).join!(channelIdB2, 0, 0, 0, 0, 0, { value: DEPOSIT_B });
+  await tx.wait();
+
+  console.error("--- Step 8: move THIS channel to a new agreed state on Chain B ---");
+  const stateB: ChannelState = { channelId: channelIdB2, nonce: 1, balanceA: ethers.parseEther("0.9"), balanceB: ethers.parseEther("1.1") };
+  const sigAonB = await signState(partyAOnB, paymentChannelB, stateB);
+  const sigBonB = await signState(partyBOnB, paymentChannelB, stateB);
+  tx = await (paymentChannelB.connect(partyAOnB) as Contract).closeUnilateral!(stateB, sigAonB, sigBonB);
+  await tx.wait();
+  console.error("  Chain B channel now in CHALLENGE_PERIOD with nonce=1, balanceA=0.9, balanceB=1.1 (funds NOT withdrawn yet)");
+
+  console.error("--- Step 9: relay Chain B's state to Chain A's LightClientVerifier (real consensus proof, REVERSE direction) ---");
+  const relayResultBA = await relayChannelState({ deployment, channelId: channelIdB2.toString(), fromChain: "chainB", toChain: "chainA" });
+  console.error(`  Chain A now trusts stateRoot=${relayResultBA.stateRoot} for Chain B`);
+
+  console.error("--- Step 10: open a MATCHING channel on Chain A and settle via closeWithRemoteAttestation ---");
+  tx = await (paymentChannelA.connect(partyAOnA) as Contract).open!(partyBAddress, DEPOSIT_A, 0, 0, 0, 0, 0, { value: DEPOSIT_A });
+  receipt = await tx.wait();
+  const openedEventA2 = receipt.logs.map((l: any) => paymentChannelA.interface.parseLog(l)).find((e: any) => e && e.name === "ChannelOpened");
+  const channelIdA2: bigint = openedEventA2.args.channelId;
+  if (channelIdA2.toString() !== channelIdB2.toString()) {
+    throw new Error(`channelId mismatch: Chain A=${channelIdA2} Chain B=${channelIdB2} (demo assumes matching ids)`);
+  }
+  tx = await (paymentChannelA.connect(partyBOnA) as Contract).join!(channelIdA2, 0, 0, 0, 0, 0, { value: DEPOSIT_B });
+  await tx.wait();
+
+  tx = await (paymentChannelA.connect(partyAOnA) as Contract).closeWithRemoteAttestation!(channelIdA2, chainB.paymentChannel, chainB.chainId, stateB);
+  await tx.wait();
+  console.error("  Chain A channel now in CHALLENGE_PERIOD with the SAME state, attested FROM Chain B this time");
+
+  console.error("--- Step 11: wait out Chain A's challenge window and withdraw ---");
+  await providerA.send("evm_increaseTime", [24 * 60 * 60 + 1]);
+  await providerA.send("evm_mine", []);
+
+  const balABeforeA = await new ethers.JsonRpcProvider(chainA.rpcUrl).getBalance(partyAAddress);
+  const balBBeforeA = await new ethers.JsonRpcProvider(chainA.rpcUrl).getBalance(partyBAddress);
+
+  tx = await (paymentChannelA.connect(partyBOnA) as Contract).withdraw!(channelIdA2);
+  const withdrawReceiptA = await tx.wait();
+  const gasCostA: bigint = BigInt(withdrawReceiptA.gasUsed) * BigInt(withdrawReceiptA.gasPrice);
+
+  const balAAfterA = await new ethers.JsonRpcProvider(chainA.rpcUrl).getBalance(partyAAddress);
+  const balBAfterA = await new ethers.JsonRpcProvider(chainA.rpcUrl).getBalance(partyBAddress);
+
+  console.error("--- Verifying Chain A payouts match Chain B's attested state ---");
+  await assertEqual("partyA payout on Chain A", balAAfterA - balABeforeA, stateB.balanceA);
+  await assertEqual("partyB payout on Chain A (net of its own withdraw() gas)", balBAfterA - balBBeforeA + gasCostA, stateB.balanceB);
+
+  console.error("\nChain B -> Chain A settle succeeded: Chain B's channel state (0.9/1.1 ETH), reached via a real");
+  console.error("consensus_proof.circom proof + Chain A's OWN LightClientVerifier, produced an identical payout on");
+  console.error("Chain A — the exact same mechanism as Part 1, running in the opposite direction. Bidirectional");
+  console.error("relay confirmed: this is not just relayChannelState()'s fromChain/toChain params being flexible,");
+  console.error("both chains genuinely have their own independent LightClientVerifier deployment.");
 }
 
 main().catch((err) => {

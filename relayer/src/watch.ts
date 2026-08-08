@@ -144,13 +144,10 @@ export function attachWatchQueue(
   };
 }
 
-async function main() {
-  const fromChain = process.argv[2] ?? "chainA";
-  const toChain = process.argv[3] ?? "chainB";
-
-  const deploymentPath = process.env.DEPLOYMENT_FILE ?? path.join(__dirname, "..", "deployment.json");
-  const deployment = loadDeployment(deploymentPath);
-
+/// Attaches one watch queue for `fromChain -> toChain`, logging and
+/// returning its detach function — the per-direction unit `main()` composes
+/// below (one call for A->B, another for B->A, when running bidirectional).
+function watchDirection(deployment: Deployment, fromChain: string, toChain: string): () => void {
   const source = deployment.chains[fromChain];
   const dest = deployment.chains[toChain];
   if (!source) throw new Error(`unknown source chain "${fromChain}" — not in deployment.json's chains`);
@@ -162,17 +159,71 @@ async function main() {
   const { abi } = artifacts.PaymentChannel();
   const paymentChannelSource = new ethers.Contract(source.paymentChannel, abi, providerSource);
 
-  const detach = attachWatchQueue(paymentChannelSource, deployment, fromChain, toChain);
+  const detach = attachWatchQueue(paymentChannelSource, deployment, fromChain, toChain, `watch ${fromChain}->${toChain}`);
 
-  console.error(`[watch] watching ${source.paymentChannel} on ${fromChain} (${source.rpcUrl}), relaying to ${toChain} on new state`);
+  console.error(`[watch ${fromChain}->${toChain}] watching ${source.paymentChannel} on ${fromChain} (${source.rpcUrl}), relaying to ${toChain} on new state`);
+  return detach;
+}
+
+// Note on bidirectional watching + closeWithRemoteAttestation: that
+// function emits the SAME `ChannelClosedUnilaterally` event a normal
+// closeUnilateral does (see PaymentChannel.sol). If a demo reuses the same
+// channelId across both chains (as e2e_demo.ts does), settling chain B's
+// channel via a relayed chain-A state will itself emit an event the B->A
+// watcher picks up — which then tries to relay chain B's (mirrored) state
+// BACK to chain A. This is harmless, not a security or fund-safety issue:
+// relayChannelState only ever submits a consensus proof to update a
+// trustedStateRoot, it never itself calls closeWithRemoteAttestation, and
+// even if a party's OWN code called it again, PaymentChannel's own status
+// guard (ACTIVE required) rejects settling an already-CHALLENGE_PERIOD/
+// CLOSED channel a second time. Worst case: one extra proof submission and
+// a log line, not a correctness or safety bug — documented rather than
+// silently "fixed" by adding relay-loop suppression that isn't needed.
+async function main() {
+  // With no args: watch BOTH directions at once, provided both chains in
+  // deployment.json have a lightClientVerifier (see chains.config.json —
+  // true for chainA/chainB by default now). Pass explicit fromChain/toChain
+  // to restrict to one direction only (e.g. for a chain that deliberately
+  // has no light client, or to run each direction as a separate process).
+  const explicitFromChain = process.argv[2];
+  const explicitToChain = process.argv[3];
+
+  const deploymentPath = process.env.DEPLOYMENT_FILE ?? path.join(__dirname, "..", "deployment.json");
+  const deployment = loadDeployment(deploymentPath);
+
   console.error(`[watch] events: ${RELEVANT_EVENTS.join(", ")}`);
+
+  const detachers: Array<() => void> = [];
+  if (explicitFromChain || explicitToChain) {
+    const fromChain = explicitFromChain ?? "chainA";
+    const toChain = explicitToChain ?? "chainB";
+    detachers.push(watchDirection(deployment, fromChain, toChain));
+  } else {
+    const chainNames = Object.keys(deployment.chains);
+    const withLightClient = chainNames.filter((name) => deployment.chains[name]!.lightClientVerifier);
+    if (withLightClient.length < 2) {
+      throw new Error(
+        `bidirectional watch needs >=2 chains with a lightClientVerifier in deployment.json (found: ${withLightClient.join(", ") || "none"}) — ` +
+          `redeploy with "lightClient": true for at least 2 entries in chains.config.json, or pass explicit fromChain/toChain args for one direction`
+      );
+    }
+    // Every ordered pair among chains that have a light client — for the
+    // common 2-chain case this is exactly {A->B, B->A}; generalizes cleanly
+    // if a 3rd/4th chain is ever added to chains.config.json.
+    for (const fromChain of withLightClient) {
+      for (const toChain of withLightClient) {
+        if (fromChain === toChain) continue;
+        detachers.push(watchDirection(deployment, fromChain, toChain));
+      }
+    }
+  }
 
   // Keep the process alive — event listeners above are what actually do
   // the work. SIGINT/SIGTERM (Ctrl-C, `docker stop`, etc.) exit cleanly
   // instead of leaving a dangling WebSocket/polling provider.
   const shutdown = () => {
     console.error("\n[watch] shutting down");
-    detach();
+    for (const detach of detachers) detach();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

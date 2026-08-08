@@ -115,10 +115,19 @@
       qua `closeWithRemoteAttestation`, rút tiền — đã CHẠY THẬT trên 2 Anvil
       thật (chainId 31337/31338), payout Chain B khớp chính xác state đã
       attest từ Chain A.
-      **Giới hạn đã biết**: relay 1 chiều (A→B) only; demo giả định
-      channelId trùng nhau giữa 2 chain (đơn giản hoá, không phải yêu cầu
-      kiến trúc). ~~Relayer chạy 1 lần theo yêu cầu, chưa có watch-loop~~ —
-      **đã vá ở Milestone 4** (`relayer/src/watch.ts`).
+      **Giới hạn đã biết**: ~~relay 1 chiều (A→B) only~~ — **đã vá (nâng cấp
+      sau Milestone 4)**: `chains.config.json` bật `"lightClient": true` cho
+      cả 2 chain, `watch.ts` không tham số tự theo dõi cả 2 chiều đồng thời,
+      `e2e_demo.ts` mở rộng chạy thật cả A→B lẫn B→A trên 2 Anvil thật (2
+      kênh riêng, mỗi chiều 1 proof Groth16 thật, payout khớp chính xác cả 2
+      phía). Bắt và vá 1 lỗi thật khi làm: `relayChannelState()` mặc định
+      dùng chung private key với partyB cho tx relay — relay chiều B→A tiêu
+      1 nonce "ngoài luồng" của partyB trên Chain A mà `NonceManager` của
+      partyB không biết, làm nonce lệch ở bước sau (`nonce has already been
+      used`); demo giờ dùng 1 account relayer riêng biệt. Giới hạn còn lại:
+      demo giả định channelId trùng nhau giữa 2 chain (đơn giản hoá, không
+      phải yêu cầu kiến trúc). ~~Relayer chạy 1 lần theo yêu cầu, chưa có
+      watch-loop~~ — **đã vá ở Milestone 4** (`relayer/src/watch.ts`).
 
 ### Milestone 4 — Hoá cứng dần theo hướng production (không bắt buộc cho demo, ghi lại để không quên)
 - [x] ~~Thay tập validator giả lập bằng verify thật (BLS aggregate
