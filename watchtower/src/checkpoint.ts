@@ -77,6 +77,17 @@ export interface SubmitCheckpointResult {
   /// — see WatchtowerRegistry.sol. Absent (not an error) if no registry was
   /// configured for this watchtower instance.
   onChainCommitTxHash?: string;
+  /// Set if a registry WAS configured, the checkpoint WAS stored locally
+  /// (the part that actually matters for challenge()-based protection —
+  /// see monitor.ts), but the on-chain commitCheckpoint() call itself
+  /// failed (e.g. BelowMinStake if the operator forgot to stake, or a
+  /// transient RPC error). Deliberately NOT thrown as an exception (a real
+  /// /code-review finding: doing so turned a real local-store success into
+  /// a misleading HTTP 500, making a caller believe the checkpoint was
+  /// rejected entirely when it was in fact accepted and will still protect
+  /// the channel via the normal watchtower path — only the STAKE-BACKED
+  /// accountability for this specific checkpoint didn't get recorded).
+  onChainCommitError?: string;
 }
 
 /// Verifies a checkpoint and stores it if valid AND newer than whatever's
@@ -111,15 +122,25 @@ export async function submitCheckpoint(
   }
 
   let onChainCommitTxHash: string | undefined;
+  let onChainCommitError: string | undefined;
   if (registry) {
-    // Same digest formula PaymentChannel.hashState()/verifyCheckpoint above
-    // used to check sigA/sigB — reused here purely as an opaque watermark,
-    // never re-derived by WatchtowerRegistry itself (see its doc comment).
-    const digest: string = await paymentChannel.hashState!(state);
-    const tx = await registry.commitCheckpoint!(state.channelId, state.nonce, digest);
-    const receipt = await tx.wait();
-    onChainCommitTxHash = receipt.hash;
+    try {
+      // Same digest formula PaymentChannel.hashState()/verifyCheckpoint
+      // above used to check sigA/sigB — reused here purely as an opaque
+      // watermark, never re-derived by WatchtowerRegistry itself (see its
+      // doc comment).
+      const digest: string = await paymentChannel.hashState!(state);
+      const tx = await registry.commitCheckpoint!(state.channelId, state.nonce, digest);
+      const receipt = await tx.wait();
+      onChainCommitTxHash = receipt.hash;
+    } catch (err) {
+      // The checkpoint is ALREADY durably stored locally at this point
+      // (store.putIfNewer above) — a failure here must not look like the
+      // whole submitCheckpoint() call failed. See onChainCommitError's doc
+      // comment for the real bug this fixes.
+      onChainCommitError = err instanceof Error ? err.message : String(err);
+    }
   }
 
-  return { stored: true, onChainCommitTxHash };
+  return { stored: true, onChainCommitTxHash, onChainCommitError };
 }

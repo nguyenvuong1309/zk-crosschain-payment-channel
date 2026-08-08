@@ -126,6 +126,18 @@ contract PaymentChannel {
         // since those reveal balanceA/B directly.
         uint256 balanceCommitment;
         bool balancesCommitted;
+        // Set once, permanently, by `closeCooperative` — a signal external
+        // watchers (e.g. WatchtowerRegistry.sol's `slash()`) can use to
+        // distinguish "this channel settled because both parties agreed on
+        // the spot" from "this channel settled because a challenge window
+        // expired unmolested". The distinction matters because
+        // `closeCooperative` can settle at ANY mutually-signed nonce —
+        // including one OLDER than some higher nonce a third party (like a
+        // watchtower) happens to have on file — with NO challenge window at
+        // all. Treating that the same as a negligently-missed challenge
+        // would falsely punish a watchtower that never had a chance to act
+        // (see WatchtowerRegistry.sol's `slash()` doc comment).
+        bool closedCooperatively;
     }
 
     uint256 public constant CHALLENGE_PERIOD = 1 days;
@@ -300,6 +312,7 @@ contract PaymentChannel {
         ch.balanceB = state.balanceB;
         ch.nonce = state.nonce;
         ch.balancesCommitted = false;
+        ch.closedCooperatively = true;
         ch.status = Status.CLOSED;
 
         _payout(ch);

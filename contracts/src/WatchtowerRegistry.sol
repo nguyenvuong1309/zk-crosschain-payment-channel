@@ -194,6 +194,16 @@ contract WatchtowerRegistry {
     ///         nonce that watchtower itself committed to on-chain — proof it
     ///         knew of a newer state and never got a challenge in before the
     ///         window closed.
+    /// @dev Excludes channels that settled via `closeCooperative`
+    ///      (`ch.closedCooperatively`) — that path accepts ANY mutually
+    ///      co-signed nonce with NO challenge window at all (see
+    ///      PaymentChannel.sol's `closeCooperative`), so a channel can
+    ///      legitimately settle at a nonce below one a watchtower has on
+    ///      file simply because both parties chose to, not because the
+    ///      watchtower missed a real opportunity to challenge. Without this
+    ///      check, two parties (or a channel that simply never needed the
+    ///      watchtower) could get an honest watchtower slashed for a
+    ///      "negligence" it never had any chance to prevent.
     function slash(uint256 channelId, address watchtower) external {
         uint256 staked = stakes[channelId][watchtower];
         if (staked == 0) revert NothingStaked();
@@ -203,6 +213,7 @@ contract WatchtowerRegistry {
 
         _observeClosed(channelId);
         PaymentChannel.Channel memory ch = paymentChannel.getChannel(channelId);
+        if (ch.closedCooperatively) revert WatchtowerNotNegligent();
         if (ch.nonce >= c.nonce) revert WatchtowerNotNegligent();
 
         stakes[channelId][watchtower] = 0;

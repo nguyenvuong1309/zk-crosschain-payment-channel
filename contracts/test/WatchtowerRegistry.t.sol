@@ -182,6 +182,37 @@ contract WatchtowerRegistryTest is Test {
         assertEq(partyB.balance, partyBBefore + 0.45 ether, "remainder split evenly, partyB half");
     }
 
+    /// @notice Regression test for a real finding from /code-review: slash()
+    ///         must NOT punish a watchtower just because closeCooperative()
+    ///         settled at a nonce below one it committed to — that path has
+    ///         NO challenge window at all (both parties can co-sign an old
+    ///         nonce and settle instantly), so the watchtower never had any
+    ///         opportunity to intervene. Without this check, ANY channel
+    ///         that simply chose to cooperatively settle at an earlier,
+    ///         still-mutually-valid nonce than what a watchtower happened to
+    ///         have on file would get that watchtower slashed for nothing.
+    function test_slash_revertsOnCooperativeClose_evenBelowCommittedNonce() public {
+        uint256 channelId = _openAndJoin(1 ether, 1 ether);
+
+        vm.prank(watchtower);
+        registry.stake{value: 1 ether}(channelId);
+        vm.prank(watchtower);
+        registry.commitCheckpoint(channelId, 5, keccak256("state at nonce 5"));
+
+        // Both parties cooperatively settle at an OLDER (but still validly
+        // co-signed) nonce than what the watchtower committed to — entirely
+        // legitimate, no fraud or missed challenge involved.
+        PaymentChannel.ChannelState memory early = _state(channelId, 1, 0.9 ether, 1.1 ether);
+        bytes memory earlySigA = _sign(partyAKey, early);
+        bytes memory earlySigB = _sign(partyBKey, early);
+        vm.prank(partyA);
+        channel.closeCooperative(early, earlySigA, earlySigB);
+        assertEq(uint256(channel.getChannel(channelId).status), uint256(PaymentChannel.Status.CLOSED));
+
+        vm.expectRevert(WatchtowerRegistry.WatchtowerNotNegligent.selector);
+        registry.slash(channelId, watchtower);
+    }
+
     function test_slash_revertsIfChannelSettledAtOrAboveCommittedNonce() public {
         uint256 channelId = _openAndJoin(1 ether, 1 ether);
 

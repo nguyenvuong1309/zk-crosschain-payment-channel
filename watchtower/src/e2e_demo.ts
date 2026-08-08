@@ -145,7 +145,7 @@ async function main() {
   // this exact demo — see docs/threat-model.md).
   const challengeReceipt = await reactToChannel({
     paymentChannel,
-    wallet: watchtowerWallet as unknown as ethers.Wallet,
+    wallet: watchtowerWallet,
     store,
     channelId,
     minBlockNumber: closeReceipt.blockNumber,

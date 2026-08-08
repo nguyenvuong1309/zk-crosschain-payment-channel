@@ -106,7 +106,7 @@ async function main() {
       // realistic; NOT monitoring is what actually matters for this demo.
       console.error(`  watchtower #${i + 1} on :${WATCHTOWER_PORTS[i]} — will go OFFLINE (no event monitoring) before the cheat attempt`);
     } else {
-      const stop = startMonitoring({ paymentChannel: readOnlyChannel, wallet: wallet as unknown as ethers.Wallet, store, onAction });
+      const stop = startMonitoring({ paymentChannel: readOnlyChannel, wallet, store, onAction });
       stopFns.push(stop);
       console.error(`  watchtower #${i + 1} on :${WATCHTOWER_PORTS[i]} — ALIVE, monitoring events`);
     }

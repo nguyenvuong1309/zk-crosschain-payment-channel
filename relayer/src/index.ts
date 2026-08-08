@@ -151,10 +151,16 @@ export async function relayChannelState({
 
   // Any FUNDED account works — updateState() has no access control (the
   // proof itself is what's trusted, see LightClientVerifier.sol's doc
-  // comment). Falls back to Anvil's default account #1 for the local demo;
-  // set RELAYER_PRIVATE_KEY in .env for anything else (a real testnet in
-  // particular — see .env.example).
-  const relayerKey = process.env.RELAYER_PRIVATE_KEY ?? "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+  // comment). Falls back to Anvil's default account #2 for the local demo
+  // — DELIBERATELY NOT account #1, which e2e_demo.ts/watchtower's demos use
+  // as partyB's key: a real /code-review finding caught this defaulting to
+  // partyB's key, which silently desyncs any NonceManager already tracking
+  // that same account on the DESTINATION chain (this function submits an
+  // out-of-band tx from a plain, unmanaged wallet, invisible to it — see
+  // relayer/src/e2e_demo.ts's RELAYER_KEY comment for the full failure
+  // mode this caused when reproduced). Set RELAYER_PRIVATE_KEY in .env for
+  // anything else (a real testnet in particular — see .env.example).
+  const relayerKey = process.env.RELAYER_PRIVATE_KEY ?? "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
   const walletDest = new ethers.Wallet(relayerKey, providerDest);
   const lightClient = new ethers.Contract(dest.lightClientVerifier, lightClientAbi, walletDest);
 

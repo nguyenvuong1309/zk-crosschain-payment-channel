@@ -9,7 +9,7 @@
 // authorized by the two signatures it was checkpointed with, never by
 // holding either party's key.
 
-import type { Contract, Wallet, ContractTransactionReceipt } from "ethers";
+import type { Contract, Signer, ContractTransactionReceipt } from "ethers";
 import type { CheckpointStore } from "./store";
 import { readConfirmed, sendWithGasBuffer } from "./rpcSync";
 
@@ -28,7 +28,8 @@ export interface ActionInfo {
 export type OnAction = (info: ActionInfo) => void;
 
 /// @param opts.paymentChannel  ethers.Contract, READ instance (provider-connected)
-/// @param opts.wallet          ethers.Wallet — funded account the watchtower
+/// @param opts.wallet          ethers.Signer (plain Wallet or NonceManager-
+///                             wrapped) — funded account the watchtower
 ///                             submits `challenge()` transactions from (does
 ///                             NOT need to be either party)
 /// @param opts.store           CheckpointStore
@@ -54,7 +55,7 @@ export async function reactToChannel({
   onAction,
 }: {
   paymentChannel: Contract;
-  wallet: Wallet;
+  wallet: Signer;
   store: CheckpointStore;
   channelId: string | bigint | number;
   minBlockNumber?: number;
@@ -117,7 +118,7 @@ export function startMonitoring({
   onAction,
 }: {
   paymentChannel: Contract;
-  wallet: Wallet;
+  wallet: Signer;
   store: CheckpointStore;
   onAction?: OnAction;
 }): () => void {

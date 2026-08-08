@@ -56,7 +56,17 @@ async function main() {
   }
 
   const provider = new ethers.JsonRpcProvider(RPC_URL);
-  const wallet = new ethers.Wallet(WATCHTOWER_KEY, provider);
+  // NonceManager, not a plain Wallet: a real /code-review finding caught
+  // this wallet being shared, unmanaged, between two independent send
+  // paths — monitor.ts's event-triggered challenge() and checkpoint.ts's
+  // HTTP-triggered registry.commitCheckpoint() (see server.ts) — with no
+  // serialization between them. Two concurrent sends from a plain Wallet
+  // can both fetch the same "pending" nonce and collide (one reverts or
+  // silently replaces the other) — NonceManager tracks the next nonce
+  // in-memory across all sends from this instance instead, closing that
+  // race. Matches the pattern already used for the same reason throughout
+  // this repo's own demo scripts (e2e_demo.ts, deploy.ts, etc.).
+  const wallet = new ethers.NonceManager(new ethers.Wallet(WATCHTOWER_KEY, provider));
   const { abi } = artifacts.PaymentChannel();
   const paymentChannel = new ethers.Contract(CONTRACT_ADDRESS, abi, provider);
 
@@ -77,7 +87,9 @@ async function main() {
   server.listen(PORT, () => console.error(`[watchtower] checkpoint API listening on :${PORT}`));
 
   startMonitoring({ paymentChannel, wallet, store, onAction });
-  console.error(`[watchtower] watching ${CONTRACT_ADDRESS} on ${RPC_URL} as ${wallet.address}`);
+  // NonceManager has no sync `.address` (see e2e_demo.ts's same note) —
+  // a plain unconnected Wallet just for this log line's address lookup.
+  console.error(`[watchtower] watching ${CONTRACT_ADDRESS} on ${RPC_URL} as ${new ethers.Wallet(WATCHTOWER_KEY).address}`);
 }
 
 if (require.main === module) {
