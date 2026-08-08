@@ -26,3 +26,6 @@ export function PaymentChannel(): Artifact {
 export function Groth16Verifier(): Artifact {
   return loadArtifact("Groth16Verifier", "Groth16Verifier");
 }
+export function WatchtowerRegistry(): Artifact {
+  return loadArtifact("WatchtowerRegistry", "WatchtowerRegistry");
+}

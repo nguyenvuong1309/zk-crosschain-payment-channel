@@ -36,7 +36,7 @@ export async function verifyCheckpoint({
   sigA: string;
   sigB: string;
 }): Promise<Checkpoint> {
-  const ch = await paymentChannel.channels!(state.channelId);
+  const ch = await paymentChannel.getChannel!(state.channelId);
   if (ch.partyA === ethers.ZeroAddress) {
     throw new InvalidCheckpointError(`channel ${state.channelId} does not exist`);
   }
@@ -72,17 +72,54 @@ export async function verifyCheckpoint({
 export interface SubmitCheckpointResult {
   stored: boolean;
   reason?: string;
+  /// Set only when a registry was configured AND this checkpoint was newer
+  /// (stored === true): the tx hash of the on-chain commitCheckpoint() call
+  /// — see WatchtowerRegistry.sol. Absent (not an error) if no registry was
+  /// configured for this watchtower instance.
+  onChainCommitTxHash?: string;
 }
 
 /// Verifies a checkpoint and stores it if valid AND newer than whatever's
-/// already stored.
+/// already stored. If `registry` (a signer-connected WatchtowerRegistry
+/// contract) is supplied, ALSO commits `(nonce, hashState digest)`
+/// on-chain — see WatchtowerRegistry.sol's doc comment for why: this is
+/// what makes a later slash() provable instead of an unverifiable "the
+/// watchtower knew" claim. Skipped (not an error) when no registry is
+/// configured, e.g. local demos without WATCHTOWER_REGISTRY set — the
+/// watchtower still works, just without stake-backed accountability (see
+/// README.md).
 export async function submitCheckpoint(
-  { paymentChannel, store, state }: { paymentChannel: Contract; store: CheckpointStore; state: ChannelStateInput },
+  {
+    paymentChannel,
+    store,
+    state,
+    registry,
+  }: {
+    paymentChannel: Contract;
+    store: CheckpointStore;
+    state: ChannelStateInput;
+    registry?: Contract;
+  },
   sigA: string,
   sigB: string
 ): Promise<SubmitCheckpointResult> {
   const checkpoint = await verifyCheckpoint({ paymentChannel, state, sigA, sigB });
   const paymentChannelAddress = await paymentChannel.getAddress();
   const stored = store.putIfNewer(paymentChannelAddress, state.channelId, checkpoint);
-  return { stored, reason: stored ? undefined : "not newer than an already-stored checkpoint" };
+  if (!stored) {
+    return { stored: false, reason: "not newer than an already-stored checkpoint" };
+  }
+
+  let onChainCommitTxHash: string | undefined;
+  if (registry) {
+    // Same digest formula PaymentChannel.hashState()/verifyCheckpoint above
+    // used to check sigA/sigB — reused here purely as an opaque watermark,
+    // never re-derived by WatchtowerRegistry itself (see its doc comment).
+    const digest: string = await paymentChannel.hashState!(state);
+    const tx = await registry.commitCheckpoint!(state.channelId, state.nonce, digest);
+    const receipt = await tx.wait();
+    onChainCommitTxHash = receipt.hash;
+  }
+
+  return { stored: true, onChainCommitTxHash };
 }

@@ -162,7 +162,7 @@ async function main() {
   const deadline = Date.now() + 15_000;
   let rescued = false;
   while (Date.now() < deadline) {
-    const ch = await paymentChannel.channels!(channelId);
+    const ch = await paymentChannel.getChannel!(channelId);
     if (ch.nonce === 2n) {
       rescued = true;
       break;

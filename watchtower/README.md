@@ -59,7 +59,37 @@ WATCHTOWER_CONTRACT=<địa chỉ PaymentChannel> pnpm start
 Biến môi trường: `WATCHTOWER_RPC_URL` (mặc định `http://127.0.0.1:8545`),
 `WATCHTOWER_CONTRACT` (bắt buộc), `WATCHTOWER_PORT` (mặc định `8787`),
 `WATCHTOWER_PRIVATE_KEY` (tài khoản gửi tx `challenge()`, chỉ cần có ETH trả
-gas — không cần quyền đặc biệt gì), `WATCHTOWER_STORE_PATH`.
+gas — không cần quyền đặc biệt gì), `WATCHTOWER_STORE_PATH`,
+`WATCHTOWER_REGISTRY` (tuỳ chọn — xem mục Staking/Slashing bên dưới).
+
+## Staking / Slashing (`contracts/src/WatchtowerRegistry.sol`)
+
+Mặc định watchtower chạy hoàn toàn dựa trên lòng tin — không ai kiểm chứng
+được on-chain rằng nó thực sự đang theo dõi hay sẽ hành động kịp lúc. Đặt
+`WATCHTOWER_REGISTRY=<địa chỉ WatchtowerRegistry>` để bật cơ chế "để tiền
+vào cửa":
+
+```bash
+# 1 lần, per watchtower: stake ETH cho 1 channel cụ thể
+cast send <registry> "stake(uint256)" <channelId> --value 0.1ether --private-key <watchtower key>
+
+# rồi chạy service như bình thường, kèm biến registry
+WATCHTOWER_CONTRACT=<PaymentChannel> WATCHTOWER_REGISTRY=<registry> pnpm start
+```
+
+Mỗi lần nhận checkpoint hợp lệ mới (`POST /checkpoint`), watchtower giờ
+**cũng** gửi 1 tx `commitCheckpoint(channelId, nonce, stateHash)` on-chain —
+tốn gas riêng cho watchtower (không phải 2 party), nhưng biến "watchtower đã
+biết state mới hơn mà không hành động" thành chứng minh được on-chain thay
+vì lời tự nhận không kiểm chứng được. Nếu channel đóng CLOSED ở nonce THẤP
+HƠN nonce watchtower đã cam kết, bất kỳ ai cũng gọi permissionless
+`slash()` được — xem `contracts/src/WatchtowerRegistry.sol` cho chi tiết
+đầy đủ (bounty 10% cho người gọi, phần còn lại chia cho 2 party bị hại).
+
+Demo end-to-end thật (`pnpm run e2e`) đã mở rộng để bao gồm luồng này: stake
+→ 2 vòng checkpoint (mỗi vòng commit on-chain) → watchtower cứu kênh đúng
+lúc → xác nhận `slash()` bị từ chối (không negligent) → `unstake()` sau
+cooldown 1 ngày.
 
 ## Giới hạn đã biết (ghi rõ trong `docs/threat-model.md` #2)
 

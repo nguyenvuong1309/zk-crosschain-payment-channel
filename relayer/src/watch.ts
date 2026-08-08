@@ -84,7 +84,7 @@ export class RelayQueue {
   private async relayOne({ channelId, reason, eventBlockNumber }: QueueItem): Promise<void> {
     try {
       const provider = this.paymentChannelSource.runner!.provider!;
-      const ch = await readConfirmed(provider, eventBlockNumber, () => this.paymentChannelSource.channels!(channelId));
+      const ch = await readConfirmed(provider, eventBlockNumber, () => this.paymentChannelSource.getChannel!(channelId));
       const currentNonce: bigint = ch.nonce;
       const last = this.lastRelayedNonce.get(channelId);
       if (last !== undefined && last >= currentNonce) {

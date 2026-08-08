@@ -25,7 +25,18 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-export function createServer({ paymentChannel, store }: { paymentChannel: Contract; store: CheckpointStore }): http.Server {
+export function createServer({
+  paymentChannel,
+  store,
+  registry,
+}: {
+  paymentChannel: Contract;
+  store: CheckpointStore;
+  /// Signer-connected WatchtowerRegistry contract (see checkpoint.ts's
+  /// submitCheckpoint) — optional, omit to run without stake-backed
+  /// accountability (see README.md).
+  registry?: Contract;
+}): http.Server {
   return http.createServer(async (req, res) => {
     try {
       if (req.method === "GET" && req.url === "/health") {
@@ -57,7 +68,11 @@ export function createServer({ paymentChannel, store }: { paymentChannel: Contra
           return;
         }
 
-        const result = await submitCheckpoint({ paymentChannel, store, state: { channelId, nonce, balanceA, balanceB } }, sigA, sigB);
+        const result = await submitCheckpoint(
+          { paymentChannel, store, state: { channelId, nonce, balanceA, balanceB }, registry },
+          sigA,
+          sigB
+        );
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(result));
         return;

@@ -30,6 +30,10 @@ import { startMonitoring, reactToChannel, type OnAction } from "./monitor";
 
 const RPC_URL = process.env.WATCHTOWER_RPC_URL ?? "http://127.0.0.1:8545";
 const CONTRACT_ADDRESS = process.env.WATCHTOWER_CONTRACT;
+// Optional — see WatchtowerRegistry.sol / README.md's staking section. When
+// unset, the watchtower runs exactly as before this feature existed: no
+// on-chain checkpoint commitments, no stake, no slashing exposure.
+const REGISTRY_ADDRESS = process.env.WATCHTOWER_REGISTRY;
 const PORT = Number(process.env.WATCHTOWER_PORT ?? 8787);
 // Falls back to Anvil's well-known demo account #2 so the local demo needs
 // zero setup — any funded account works, the watchtower needs no special
@@ -58,9 +62,18 @@ async function main() {
 
   const store = new CheckpointStore(process.env.WATCHTOWER_STORE_PATH ?? path.join(__dirname, "..", "checkpoints.json"));
 
+  let registry: ethers.Contract | undefined;
+  if (REGISTRY_ADDRESS) {
+    const { abi: registryAbi } = artifacts.WatchtowerRegistry();
+    registry = new ethers.Contract(REGISTRY_ADDRESS, registryAbi, wallet);
+    console.error(`[watchtower] staking registry configured at ${REGISTRY_ADDRESS} — checkpoints will also commit on-chain`);
+  } else {
+    console.error("[watchtower] no WATCHTOWER_REGISTRY set — running without stake-backed accountability (see README.md)");
+  }
+
   const onAction: OnAction = (info) => console.error(`[watchtower] channel ${info.channelId}: ${info.action}${info.reason ? ` (${info.reason})` : ""}`);
 
-  const server = createServer({ paymentChannel, store });
+  const server = createServer({ paymentChannel, store, registry });
   server.listen(PORT, () => console.error(`[watchtower] checkpoint API listening on :${PORT}`));
 
   startMonitoring({ paymentChannel, wallet, store, onAction });

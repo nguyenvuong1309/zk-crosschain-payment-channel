@@ -62,6 +62,7 @@ async function main() {
   // wallets just for address lookups.
   const partyAAddress = new ethers.Wallet(PARTY_A_KEY).address;
   const partyBAddress = new ethers.Wallet(PARTY_B_KEY).address;
+  const watchtowerAddress = new ethers.Wallet(WATCHTOWER_KEY).address;
 
   console.error("--- Step 0: deploy PaymentChannel ---");
   const { abi: verifierAbi, bytecode: verifierBytecode } = artifacts.Groth16Verifier();
@@ -74,7 +75,27 @@ async function main() {
   const paymentChannel = (await (await pcFactory.deploy(await verifier.getAddress(), ethers.ZeroAddress)).waitForDeployment()) as Contract;
   console.error(`  PaymentChannel deployed at ${await paymentChannel.getAddress()}`);
 
-  const store = new CheckpointStore(path.join(__dirname, "..", "checkpoints.demo.json"));
+  const { abi: registryAbi, bytecode: registryBytecode } = artifacts.WatchtowerRegistry();
+  const registryFactory = new ethers.ContractFactory(registryAbi, registryBytecode, deployerWallet);
+  const registry = (await (await registryFactory.deploy(await paymentChannel.getAddress())).waitForDeployment()) as Contract;
+  const registryAsWatchtower = registry.connect(watchtowerWallet) as Contract;
+  console.error(`  WatchtowerRegistry deployed at ${await registry.getAddress()}`);
+
+  // Deleted first, not just reused: a fresh local Anvil redeploys
+  // PaymentChannel/WatchtowerRegistry at the SAME CREATE address as any
+  // prior run (deterministic from the deployer's nonce, which also resets
+  // on Anvil restart) — a leftover store entry under that same address:
+  // channelId key would make putIfNewer() see round1/round2 as "not newer"
+  // than what's already on file, silently skipping this run's on-chain
+  // commitCheckpoint calls in Step 2 below (the store would still read back
+  // the right VALUES, since the script is deterministic, masking the bug).
+  const storePath = path.join(__dirname, "..", "checkpoints.demo.json");
+  try {
+    require("fs").unlinkSync(storePath);
+  } catch {
+    // fine — nothing to delete on a first run
+  }
+  const store = new CheckpointStore(storePath);
   const onAction = (info: { channelId: unknown; action: string; reason?: string }) =>
     console.error(`  [watchtower] channel ${info.channelId}: ${info.action}${info.reason ? ` (${info.reason})` : ""}`);
 
@@ -88,18 +109,26 @@ async function main() {
   tx = await (paymentChannel.connect(partyBWallet) as Contract).join!(channelId, 0, 0, 0, 0, 0, { value: DEPOSIT_B });
   await tx.wait();
 
-  console.error("--- Step 2: two off-chain rounds, BOTH checkpointed with the watchtower ---");
+  console.error("--- Step 1b: watchtower stakes against this channel (see WatchtowerRegistry.sol) ---");
+  tx = await registryAsWatchtower.stake!(channelId, { value: ethers.parseEther("0.1") });
+  await tx.wait();
+  console.error(`  staked 0.1 ETH — MIN_STAKE is ${ethers.formatEther(await registry.MIN_STAKE!())} ETH`);
+
+  console.error("--- Step 2: two off-chain rounds, BOTH checkpointed with the watchtower (and committed on-chain) ---");
   const round1: ChannelStateInput = { channelId, nonce: 1, balanceA: ethers.parseEther("0.7"), balanceB: ethers.parseEther("1.3") };
   const round1SigA = await signState(partyAWallet, paymentChannel, round1);
   const round1SigB = await signState(partyBWallet, paymentChannel, round1);
-  await submitCheckpoint({ paymentChannel, store, state: round1 }, round1SigA, round1SigB);
-  console.error("  round 1 (nonce=1, 0.7/1.3) checkpointed");
+  await submitCheckpoint({ paymentChannel, store, state: round1, registry: registryAsWatchtower }, round1SigA, round1SigB);
+  console.error("  round 1 (nonce=1, 0.7/1.3) checkpointed + committed on-chain");
 
   const round2: ChannelStateInput = { channelId, nonce: 2, balanceA: ethers.parseEther("0.2"), balanceB: ethers.parseEther("1.8") };
   const round2SigA = await signState(partyAWallet, paymentChannel, round2);
   const round2SigB = await signState(partyBWallet, paymentChannel, round2);
-  await submitCheckpoint({ paymentChannel, store, state: round2 }, round2SigA, round2SigB);
-  console.error("  round 2 (nonce=2, 0.2/1.8) checkpointed — this is the TRUE latest state");
+  await submitCheckpoint({ paymentChannel, store, state: round2, registry: registryAsWatchtower }, round2SigA, round2SigB);
+  console.error("  round 2 (nonce=2, 0.2/1.8) checkpointed + committed on-chain — this is the TRUE latest state");
+
+  const committedNonce: bigint = (await registry.commitments!(channelId, watchtowerAddress)).nonce;
+  await assertEqual("WatchtowerRegistry's committed nonce after both rounds", committedNonce, 2n);
 
   console.error("--- Step 3: partyB goes offline. partyA cheats: closes with the STALE round-1 state ---");
   tx = await (paymentChannel.connect(partyAWallet) as Contract).closeUnilateral!(round1, round1SigA, round1SigB);
@@ -125,7 +154,7 @@ async function main() {
 
   // Confirm against the CHALLENGE tx's own block (not closeReceipt's,
   // which is from before the rescue) — same reasoning as above.
-  const chAfterChallenge = await readConfirmed(provider, challengeReceipt!.blockNumber, () => paymentChannel.channels!(channelId));
+  const chAfterChallenge = await readConfirmed(provider, challengeReceipt!.blockNumber, () => paymentChannel.getChannel!(channelId));
   await assertEqual("on-chain nonce after watchtower's rescue challenge", chAfterChallenge.nonce, 2n);
   await assertEqual("on-chain balanceA after rescue", chAfterChallenge.balanceA, round2.balanceA as bigint);
   await assertEqual("on-chain balanceB after rescue", chAfterChallenge.balanceB, round2.balanceB as bigint);
@@ -161,9 +190,46 @@ async function main() {
   await assertEqual("partyA payout (net of its own withdraw() gas)", balAAfter - balABefore + gasCost, round2.balanceA as bigint);
   await assertEqual("partyB payout (received while completely offline)", balBAfter - balBBefore, round2.balanceB as bigint);
 
+  console.error("--- Step 6: proving the watchtower is NOT slashable — it did its job ---");
+  // The channel settled CLOSED at nonce 2, the SAME nonce the watchtower
+  // committed to on-chain (not below it) — slash() must refuse. This is the
+  // "honest watchtower" counterpart to WatchtowerRegistry.t.sol's negligence
+  // tests, run here against a REAL rescue instead of a synthetic scenario.
+  // staticCall, not a real tx: this only PROBES whether slash() would
+  // revert (an eth_call, no nonce spent) — sending it as a real transaction
+  // via a NonceManager-wrapped signer and letting estimateGas fail would
+  // desync that signer's in-memory nonce counter from the chain's actual
+  // nonce (the failed call still reserves a nonce locally before
+  // estimateGas rejects it), permanently hanging every later tx from that
+  // signer waiting for a nonce the chain never sees. Observed exactly this
+  // hang while writing this demo — see NonceManager notes elsewhere in this
+  // file for the same class of issue.
+  let slashReverted = false;
+  try {
+    await registry.slash!.staticCall(channelId, watchtowerAddress);
+  } catch {
+    slashReverted = true;
+  }
+  if (!slashReverted) throw new Error("slash() should have reverted — watchtower was not negligent");
+  console.error("  OK  slash() correctly reverts — watchtower's committed nonce (2) was never left behind");
+
+  console.error("--- Step 7: watchtower reclaims its stake once the cooldown passes ---");
+  tx = await registry.observeClosed!(channelId);
+  await tx.wait();
+  await provider.send("evm_increaseTime", [24 * 60 * 60 + 1]);
+  await provider.send("evm_mine", []);
+  const stakeBefore: bigint = await registry.stakes!(channelId, watchtowerAddress);
+  tx = await registryAsWatchtower.unstake!(channelId);
+  await tx.wait();
+  const stakeAfter: bigint = await registry.stakes!(channelId, watchtowerAddress);
+  await assertEqual("watchtower's stake before unstake", stakeBefore, ethers.parseEther("0.1"));
+  await assertEqual("watchtower's stake after unstake", stakeAfter, 0n);
+
   console.error("\nWatchtower demo succeeded: partyA's stale closeUnilateral(nonce=1, 0.7/1.3) was overridden");
   console.error("by the watchtower's automatic challenge(nonce=2, 0.2/1.8) — partyB got the correct 1.8 ETH");
-  console.error("payout despite never once going online during the entire dispute.");
+  console.error("payout despite never once going online during the entire dispute. The watchtower's on-chain");
+  console.error("checkpoint commitments (WatchtowerRegistry.sol) also proved it was never negligent, and it");
+  console.error("reclaimed its stake once the cooldown passed.");
 }
 
 main().catch((err) => {

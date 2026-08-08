@@ -65,8 +65,8 @@ export async function reactToChannel({
 
   const ch =
     minBlockNumber !== undefined
-      ? await readConfirmed(provider, minBlockNumber, () => paymentChannel.channels!(channelId))
-      : await paymentChannel.channels!(channelId);
+      ? await readConfirmed(provider, minBlockNumber, () => paymentChannel.getChannel!(channelId))
+      : await paymentChannel.getChannel!(channelId);
 
   if (Number(ch.status) !== PaymentChannelStatus.CHALLENGE_PERIOD) {
     onAction?.({ channelId, action: "skip", reason: `status is ${ch.status}, not CHALLENGE_PERIOD` });

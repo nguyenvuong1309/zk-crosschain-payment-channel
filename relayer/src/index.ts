@@ -125,7 +125,7 @@ export async function relayChannelState({
   const { abi: lightClientAbi } = artifacts.LightClientVerifier();
 
   const paymentChannelSource = new ethers.Contract(source.paymentChannel, paymentChannelAbi, providerSource);
-  const ch = await paymentChannelSource.channels!(channelId);
+  const ch = await paymentChannelSource.getChannel!(channelId);
   // ethers v6 returns uint256 struct fields as native bigint already.
   const nonce: bigint = ch.nonce;
   const balanceA: bigint = ch.balanceA;
