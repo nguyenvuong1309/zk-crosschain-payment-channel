@@ -8,6 +8,7 @@
     "relay": "tsx src/index.ts",
     "watch": "tsx src/watch.ts",
     "e2e": "tsx src/e2e_demo.ts",
+    "e2e:multi": "tsx src/multi_relayer_e2e.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

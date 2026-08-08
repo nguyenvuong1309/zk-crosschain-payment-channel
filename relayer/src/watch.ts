@@ -21,6 +21,7 @@ import { ethers } from "ethers";
 import * as artifacts from "./artifacts";
 import { relayChannelState, loadDeployment } from "./index";
 import type { Deployment } from "./deploy";
+import { readConfirmed } from "./rpcSync";
 
 // Events that mean "this channel's on-chain state on fromChain just
 // advanced, relay it" — mirrors watchtower/src/monitor.ts's event set plus
@@ -32,6 +33,12 @@ const RELEVANT_EVENTS = ["ChannelClosedCooperatively", "ChannelClosedUnilaterall
 interface QueueItem {
   channelId: string;
   reason: string;
+  // The event's own block number — used to confirm the RPC has actually
+  // caught up before reading channels() state below (see rpcSync.ts's
+  // header comment: a real read-staleness race found testing against a
+  // forked/real RPC, reads right after a state change can return old
+  // data).
+  eventBlockNumber: number;
 }
 
 /// Serializes ALL relays through one queue rather than firing them
@@ -40,7 +47,7 @@ interface QueueItem {
 /// from concurrent sends off the same wallet against Anvil (see
 /// deploy.ts/e2e_demo.ts's NonceManager comments) — serializing sidesteps
 /// that class of bug entirely instead of re-solving it here.
-class RelayQueue {
+export class RelayQueue {
   private queue: QueueItem[] = [];
   private draining = false;
   // channelId -> last nonce successfully relayed, so a burst of events for
@@ -74,9 +81,10 @@ class RelayQueue {
     }
   }
 
-  private async relayOne({ channelId, reason }: QueueItem): Promise<void> {
+  private async relayOne({ channelId, reason, eventBlockNumber }: QueueItem): Promise<void> {
     try {
-      const ch = await this.paymentChannelSource.channels!(channelId);
+      const provider = this.paymentChannelSource.runner!.provider!;
+      const ch = await readConfirmed(provider, eventBlockNumber, () => this.paymentChannelSource.channels!(channelId));
       const currentNonce: bigint = ch.nonce;
       const last = this.lastRelayedNonce.get(channelId);
       if (last !== undefined && last >= currentNonce) {
@@ -102,6 +110,40 @@ class RelayQueue {
   }
 }
 
+/// Subscribes a RelayQueue to `paymentChannelSource`'s relevant events —
+/// the reusable half of `main()` below, factored out so
+/// `multi_relayer_e2e.ts` can attach several independent watch instances
+/// to the same source contract (each with its own queue/label) without
+/// duplicating this wiring. Returns a function to detach (simulating that
+/// instance going offline).
+export function attachWatchQueue(
+  paymentChannelSource: ethers.Contract,
+  deployment: Deployment,
+  fromChain: string,
+  toChain: string,
+  label = "watch"
+): () => void {
+  const queue = new RelayQueue(deployment, fromChain, toChain, paymentChannelSource);
+  const handlers = RELEVANT_EVENTS.map((eventName) => {
+    // ethers v6 passes the triggering EventLog as the LAST argument
+    // regardless of how many params the event itself declares — used here
+    // purely for `.log.blockNumber` (see QueueItem's eventBlockNumber doc
+    // comment above).
+    const handler = (channelId: bigint, ...rest: unknown[]) => {
+      const eventPayload = rest[rest.length - 1] as { log?: { blockNumber?: number } } | undefined;
+      const eventBlockNumber = eventPayload?.log?.blockNumber ?? 0;
+      console.error(`[${label}] channel ${channelId}: event ${eventName} at block ${eventBlockNumber}`);
+      queue.push({ channelId: channelId.toString(), reason: eventName, eventBlockNumber });
+    };
+    paymentChannelSource.on(eventName, handler);
+    return { eventName, handler };
+  });
+
+  return () => {
+    for (const { eventName, handler } of handlers) paymentChannelSource.off(eventName, handler);
+  };
+}
+
 async function main() {
   const fromChain = process.argv[2] ?? "chainA";
   const toChain = process.argv[3] ?? "chainB";
@@ -120,13 +162,7 @@ async function main() {
   const { abi } = artifacts.PaymentChannel();
   const paymentChannelSource = new ethers.Contract(source.paymentChannel, abi, providerSource);
 
-  const queue = new RelayQueue(deployment, fromChain, toChain, paymentChannelSource);
-
-  for (const eventName of RELEVANT_EVENTS) {
-    paymentChannelSource.on(eventName, (channelId: bigint) => {
-      queue.push({ channelId: channelId.toString(), reason: eventName });
-    });
-  }
+  const detach = attachWatchQueue(paymentChannelSource, deployment, fromChain, toChain);
 
   console.error(`[watch] watching ${source.paymentChannel} on ${fromChain} (${source.rpcUrl}), relaying to ${toChain} on new state`);
   console.error(`[watch] events: ${RELEVANT_EVENTS.join(", ")}`);
@@ -136,14 +172,23 @@ async function main() {
   // instead of leaving a dangling WebSocket/polling provider.
   const shutdown = () => {
     console.error("\n[watch] shutting down");
-    paymentChannelSource.removeAllListeners();
+    detach();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Guard, like every other entry-point script in this repo (index.ts,
+// deploy.ts) — without it, importing this module just for
+// `attachWatchQueue`/`RelayQueue` (e.g. multi_relayer_e2e.ts) would ALSO
+// run this file's own `main()` as an unwanted side effect, racing a SECOND
+// independent relay against whatever imported it. Exactly the bug that
+// caused a `replacement transaction underpriced` collision when this guard
+// was missing — see docs/threat-model.md.
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

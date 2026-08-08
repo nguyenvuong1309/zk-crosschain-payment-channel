@@ -19,6 +19,7 @@ import * as artifacts from "./artifacts";
 import { CheckpointStore } from "./store";
 import { submitCheckpoint, type ChannelStateInput } from "./checkpoint";
 import { reactToChannel } from "./monitor";
+import { readConfirmed } from "./rpcSync";
 
 const RPC_URL = process.env.WATCHTOWER_RPC_URL ?? "http://127.0.0.1:8545";
 
@@ -109,9 +110,22 @@ async function main() {
   // In production this fires from the event listener (see monitor.ts
   // startMonitoring) within one polling interval; called directly here so
   // the demo doesn't need to sleep an arbitrary amount waiting for it.
-  await reactToChannel({ paymentChannel, wallet: watchtowerWallet as unknown as ethers.Wallet, store, channelId, onAction });
+  // minBlockNumber = closeReceipt's own block — see monitor.ts's
+  // reactToChannel doc comment / rpcSync.ts for why this matters (a real
+  // race observed against a forked/real RPC, reproduced and diagnosed via
+  // this exact demo — see docs/threat-model.md).
+  const challengeReceipt = await reactToChannel({
+    paymentChannel,
+    wallet: watchtowerWallet as unknown as ethers.Wallet,
+    store,
+    channelId,
+    minBlockNumber: closeReceipt.blockNumber,
+    onAction,
+  });
 
-  const chAfterChallenge = await paymentChannel.channels!(channelId);
+  // Confirm against the CHALLENGE tx's own block (not closeReceipt's,
+  // which is from before the rescue) — same reasoning as above.
+  const chAfterChallenge = await readConfirmed(provider, challengeReceipt!.blockNumber, () => paymentChannel.channels!(channelId));
   await assertEqual("on-chain nonce after watchtower's rescue challenge", chAfterChallenge.nonce, 2n);
   await assertEqual("on-chain balanceA after rescue", chAfterChallenge.balanceA, round2.balanceA as bigint);
   await assertEqual("on-chain balanceB after rescue", chAfterChallenge.balanceB, round2.balanceB as bigint);
@@ -123,9 +137,14 @@ async function main() {
   // Fresh provider instances for these balance snapshots — reusing `provider`
   // for rapid sequential eth_getBalance calls was observed to return stale
   // values against Anvil (same class of issue as the nonce staleness noted
-  // above for NonceManager).
-  const balABefore = await new ethers.JsonRpcProvider(RPC_URL).getBalance(partyAAddress);
-  const balBBefore = await new ethers.JsonRpcProvider(RPC_URL).getBalance(partyBAddress);
+  // above for NonceManager). Fresh instances alone turned out NOT to be
+  // enough against a forked/real RPC though (see rpcSync.ts's header
+  // comment) — readConfirmed's block-number + stability-retry check is the
+  // actual fix; kept as a fresh provider on top for defense in depth.
+  const beforeProvider = new ethers.JsonRpcProvider(RPC_URL);
+  const beforeBlock = await beforeProvider.getBlockNumber();
+  const balABefore = await readConfirmed(beforeProvider, beforeBlock, () => beforeProvider.getBalance(partyAAddress));
+  const balBBefore = await readConfirmed(beforeProvider, beforeBlock, () => beforeProvider.getBalance(partyBAddress));
 
   // partyB is "offline" so a neutral relayer... but withdraw() is
   // onlyParty; use partyA (the cheat attempt failed, but partyA still gets
@@ -134,8 +153,9 @@ async function main() {
   const withdrawReceipt = await tx.wait();
   const gasCost: bigint = BigInt(withdrawReceipt.gasUsed) * BigInt(withdrawReceipt.gasPrice);
 
-  const balAAfter = await new ethers.JsonRpcProvider(RPC_URL).getBalance(partyAAddress);
-  const balBAfter = await new ethers.JsonRpcProvider(RPC_URL).getBalance(partyBAddress);
+  const afterProvider = new ethers.JsonRpcProvider(RPC_URL);
+  const balAAfter = await readConfirmed(afterProvider, withdrawReceipt.blockNumber, () => afterProvider.getBalance(partyAAddress));
+  const balBAfter = await readConfirmed(afterProvider, withdrawReceipt.blockNumber, () => afterProvider.getBalance(partyBAddress));
 
   console.error("--- Verifying final payout matches the RESCUED state, not the fraudulent one ---");
   await assertEqual("partyA payout (net of its own withdraw() gas)", balAAfter - balABefore + gasCost, round2.balanceA as bigint);

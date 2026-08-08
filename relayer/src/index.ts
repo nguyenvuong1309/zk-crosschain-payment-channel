@@ -35,6 +35,7 @@ import { execFileSync } from "child_process";
 import { ethers } from "ethers";
 import * as artifacts from "./artifacts";
 import type { Deployment } from "./deploy";
+import { sendWithGasBuffer } from "./rpcSync";
 
 const CIRCUITS_SCRIPT = path.join(__dirname, "..", "..", "circuits", "scripts", "prove_and_export_consensus.sh");
 
@@ -157,8 +158,12 @@ export async function relayChannelState({
   const walletDest = new ethers.Wallet(relayerKey, providerDest);
   const lightClient = new ethers.Contract(dest.lightClientVerifier, lightClientAbi, walletDest);
 
-  const tx = await lightClient.updateState!(a, b, c, pubSignals);
-  const receipt = await tx.wait();
+  // sendWithGasBuffer, not a plain call — see rpcSync.ts's header comment:
+  // a real on-chain OutOfGas revert was observed on the equivalent
+  // watchtower challenge() call (ethers' auto gas estimate ran short of
+  // what the tx actually needed at execution time).
+  const tx = await sendWithGasBuffer(lightClient.updateState!, [a, b, c, pubSignals]);
+  const receipt = (await tx.wait())!;
 
   console.error(`Submitted to ${toChain}'s LightClientVerifier: tx ${receipt.hash}`);
 

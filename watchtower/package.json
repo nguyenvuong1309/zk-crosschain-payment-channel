@@ -6,6 +6,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "e2e": "tsx src/e2e_demo.ts",
+    "e2e:multi": "tsx src/multi_watchtower_e2e.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
