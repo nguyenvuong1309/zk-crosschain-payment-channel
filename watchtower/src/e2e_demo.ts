@@ -92,8 +92,13 @@ async function main() {
   const storePath = path.join(__dirname, "..", "checkpoints.demo.json");
   try {
     require("fs").unlinkSync(storePath);
-  } catch {
-    // fine — nothing to delete on a first run
+  } catch (err) {
+    // ENOENT (nothing to delete on a first run) is fine and expected — any
+    // OTHER failure (permissions, file locked) must NOT be swallowed: it
+    // would silently leave the stale store in place, reproducing exactly
+    // the bug this deletion step exists to prevent (see comment above), just
+    // failing quietly instead of loudly (a real /code-review finding).
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
   }
   const store = new CheckpointStore(storePath);
   const onAction = (info: { channelId: unknown; action: string; reason?: string }) =>

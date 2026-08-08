@@ -35,14 +35,17 @@ export async function verifyCheckpoint({
   state: ChannelStateInput;
   sigA: string;
   sigB: string;
-}): Promise<Checkpoint> {
+}): Promise<{ checkpoint: Checkpoint; digest: string }> {
   const ch = await paymentChannel.getChannel!(state.channelId);
   if (ch.partyA === ethers.ZeroAddress) {
     throw new InvalidCheckpointError(`channel ${state.channelId} does not exist`);
   }
 
   // Mirrors PaymentChannel.sol::_verifyBothSignatures exactly — same digest
-  // (hashState, domain-separated), same personal-sign recovery.
+  // (hashState, domain-separated), same personal-sign recovery. Returned to
+  // the caller so submitCheckpoint() can reuse it for the on-chain
+  // commitCheckpoint() watermark instead of re-deriving it via a second RPC
+  // call for the identical `state` (a real /code-review finding).
   const digest: string = await paymentChannel.hashState!(state);
   const recoveredA = ethers.verifyMessage(ethers.getBytes(digest), sigA);
   const recoveredB = ethers.verifyMessage(ethers.getBytes(digest), sigB);
@@ -66,7 +69,38 @@ export async function verifyCheckpoint({
     balanceB: state.balanceB.toString(),
   };
 
-  return { state: normalizedState, sigA, sigB, verifiedAt: new Date().toISOString() };
+  return { checkpoint: { state: normalizedState, sigA, sigB, verifiedAt: new Date().toISOString() }, digest };
+}
+
+// Serializes on-chain commitCheckpoint() calls per (paymentChannel, channel)
+// — without this, two /checkpoint requests arriving close together for the
+// SAME channel (e.g. nonce=1 then nonce=2) can have their async execution
+// interleave such that the LATER checkpoint's tx reaches the shared
+// NonceManager-wrapped signer first, getting a lower account nonce and
+// mining before the earlier one. The earlier (still valid, still first-
+// submitted) checkpoint's tx then hits WatchtowerRegistry's
+// `nonce <= commitments[...].nonce` guard and reverts with
+// NonceNotIncreasing — a confusing, avoidable failure (a real /code-review
+// finding), even though impact was bounded (the max committed nonce still
+// ends up correct once BOTH land, just not the earlier one, and only if it
+// mines second). Keying by channelId alone (not also paymentChannel address)
+// is deliberately conservative — this process talks to at most one
+// PaymentChannel/registry pair at a time in practice, and over-serializing
+// across an unlikely multi-channel collision costs nothing but a little
+// latency, unlike under-serializing, which reintroduces the bug.
+const commitLocks = new Map<string, Promise<unknown>>();
+
+async function withCommitLock<T>(channelId: string, fn: () => Promise<T>): Promise<T> {
+  const prior = commitLocks.get(channelId) ?? Promise.resolve();
+  const run = prior.then(fn, fn);
+  // Swallow here so one failed commit doesn't poison the chain for the next
+  // caller waiting on this key — each caller still observes its own
+  // rejection via the awaited `run` below.
+  commitLocks.set(
+    channelId,
+    run.catch(() => undefined)
+  );
+  return run;
 }
 
 export interface SubmitCheckpointResult {
@@ -114,7 +148,7 @@ export async function submitCheckpoint(
   sigA: string,
   sigB: string
 ): Promise<SubmitCheckpointResult> {
-  const checkpoint = await verifyCheckpoint({ paymentChannel, state, sigA, sigB });
+  const { checkpoint, digest } = await verifyCheckpoint({ paymentChannel, state, sigA, sigB });
   const paymentChannelAddress = await paymentChannel.getAddress();
   const stored = store.putIfNewer(paymentChannelAddress, state.channelId, checkpoint);
   if (!stored) {
@@ -125,13 +159,14 @@ export async function submitCheckpoint(
   let onChainCommitError: string | undefined;
   if (registry) {
     try {
-      // Same digest formula PaymentChannel.hashState()/verifyCheckpoint
-      // above used to check sigA/sigB — reused here purely as an opaque
-      // watermark, never re-derived by WatchtowerRegistry itself (see its
-      // doc comment).
-      const digest: string = await paymentChannel.hashState!(state);
-      const tx = await registry.commitCheckpoint!(state.channelId, state.nonce, digest);
-      const receipt = await tx.wait();
+      // Reuses `digest` from verifyCheckpoint above (same hashState() value,
+      // one fewer RPC round-trip) purely as an opaque watermark, never
+      // re-derived by WatchtowerRegistry itself (see its doc comment).
+      // Serialized per-channel — see withCommitLock's doc comment for why.
+      const receipt = await withCommitLock(state.channelId.toString(), async () => {
+        const tx = await registry.commitCheckpoint!(state.channelId, state.nonce, digest);
+        return tx.wait();
+      });
       onChainCommitTxHash = receipt.hash;
     } catch (err) {
       // The checkpoint is ALREADY durably stored locally at this point
