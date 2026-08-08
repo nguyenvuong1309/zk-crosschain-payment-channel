@@ -22,15 +22,16 @@ import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 ///         or PLAN.md Milestone 2 for the one-time setup.
 ///
 ///         Public signal layout (see IChannelStateVerifier / PaymentChannel.sol):
-///           [0] outNonce  [1] balanceCommitment  [2] channelId
-///           [3] pubKeyAx  [4] pubKeyAy  [5] pubKeyBx  [6] pubKeyBy
-///           [7] initBalanceA  [8] initBalanceB  [9] contractAddress  [10] chainId
+///           [0] outNonce  [1] startCommitment  [2] endCommitment
+///           [3] channelId [4] pubKeyAx  [5] pubKeyAy  [6] pubKeyBx  [7] pubKeyBy
+///           [8] contractAddress  [9] chainId  [10] startNonce
 ///
-///         Since Milestone "privacy upgrade" (see channel_state.circom's doc
-///         comment), the proof no longer exposes the final balances
-///         directly — only `balanceCommitment = Poseidon(outBalanceA,
-///         outBalanceB, blinding)`. Tests that need the actual balances
-///         (e.g. to assert a payout) use the known demo values baked into
+///         Since the "privacy upgrade" (see channel_state.circom's doc
+///         comment), the proof never exposes balances directly — only
+///         Poseidon commitments to them, at BOTH ends of the chain (needed
+///         for chaining proofs together — see the "chaining" tests below).
+///         Tests that need the actual balances (e.g. to assert a payout)
+///         use the known demo values baked into
 ///         circuits/input_gen/build_channel_state_input.ts's DEFAULT_UPDATES/
 ///         DEFAULT_BLINDING and open via `withdrawWithOpening`.
 contract ChannelStateProofTest is Test {
@@ -118,9 +119,14 @@ contract ChannelStateProofTest is Test {
         channel.join{value: DEPOSIT_B}(channelId, PUBKEY_BX, PUBKEY_BY, bR8x, bR8y, bS);
     }
 
-    /// @dev Generates a real proof bound to `channel`'s actual deployed
+    /// @dev Generates a GENESIS-anchored real proof (startNonce=0,
+    ///      startBalance=deposits) bound to `channel`'s actual deployed
     ///      address and the current `block.chainid`, via
-    ///      circuits/scripts/prove_and_export.sh (~5-10s).
+    ///      circuits/scripts/prove_and_export.sh (~5-10s). For a
+    ///      CONTINUATION proof (chaining past `steps` updates), build the
+    ///      `cmd` array directly and call `_runProveScript` — see the
+    ///      chaining tests below, which use
+    ///      circuits/scripts/prove_and_export_continuation.sh instead.
     function _generateProof(uint256 channelId)
         internal
         returns (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals)
@@ -131,7 +137,13 @@ contract ChannelStateProofTest is Test {
         cmd[2] = vm.toString(address(channel));
         cmd[3] = vm.toString(block.chainid);
         cmd[4] = vm.toString(channelId);
+        return _runProveScript(cmd);
+    }
 
+    function _runProveScript(string[] memory cmd)
+        internal
+        returns (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals)
+    {
         bytes memory result = vm.ffi(cmd);
         string memory json = string(result);
 
@@ -156,9 +168,10 @@ contract ChannelStateProofTest is Test {
 
         assertTrue(verifier.verifyProof(a, b, c, pubSignals));
         assertEq(
-            pubSignals[9], uint256(uint160(address(channel))), "proof's contractAddress must match actual deployment"
+            pubSignals[8], uint256(uint160(address(channel))), "proof's contractAddress must match actual deployment"
         );
-        assertEq(pubSignals[10], block.chainid, "proof's chainId must match actual chain");
+        assertEq(pubSignals[9], block.chainid, "proof's chainId must match actual chain");
+        assertEq(pubSignals[10], 0, "genesis-anchored proof must start at nonce 0");
     }
 
     function test_closeWithProof_startsChallengePeriodWithCommitment() public {
@@ -173,7 +186,7 @@ contract ChannelStateProofTest is Test {
         assertEq(uint256(ch.status), uint256(PaymentChannel.Status.CHALLENGE_PERIOD));
         assertEq(ch.nonce, 6);
         assertTrue(ch.balancesCommitted, "closeWithProof must not reveal the balances directly");
-        assertEq(ch.balanceCommitment, pubSignals[1]);
+        assertEq(ch.balanceCommitment, pubSignals[2], "stored commitment must be the proof's endCommitment");
     }
 
     function test_closeWithProof_thenWithdrawWithOpening_paysOutProvenBalances() public {
@@ -223,7 +236,7 @@ contract ChannelStateProofTest is Test {
         (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
             _generateProof(channelId);
 
-        pubSignals[2] = channelId + 999; // tamper with the channelId public signal
+        pubSignals[3] = channelId + 999; // tamper with the channelId public signal
 
         vm.prank(partyA);
         vm.expectRevert(PaymentChannel.ChannelIdMismatch.selector);
@@ -243,7 +256,7 @@ contract ChannelStateProofTest is Test {
 
         (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
             _generateProof(channelId);
-        pubSignals[2] = channelId;
+        pubSignals[3] = channelId;
 
         vm.prank(partyA);
         vm.expectRevert(PaymentChannel.PublicKeyMismatch.selector);
@@ -255,10 +268,26 @@ contract ChannelStateProofTest is Test {
         (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
             _generateProof(channelId);
 
-        pubSignals[1] = 999_999; // claim a different balanceCommitment without a matching proof
+        pubSignals[2] = 999_999; // claim a different endCommitment without a matching proof
 
         vm.prank(partyA);
         vm.expectRevert(PaymentChannel.InvalidProof.selector);
+        channel.closeWithProof(channelId, a, b, c, pubSignals);
+    }
+
+    function test_closeWithProof_revertsOnWrongAnchor() public {
+        uint256 channelId = _openRealChannel();
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
+            _generateProof(channelId);
+
+        // Claim a non-zero startNonce for a channel that's never been
+        // proof-closed before (ch.balancesCommitted is false) — must be
+        // rejected BEFORE ever calling the (expensive) Groth16 verifier,
+        // since it can't possibly match the required genesis anchor.
+        pubSignals[10] = 1;
+
+        vm.prank(partyA);
+        vm.expectRevert(PaymentChannel.InvalidChainAnchor.selector);
         channel.closeWithProof(channelId, a, b, c, pubSignals);
     }
 
@@ -278,24 +307,104 @@ contract ChannelStateProofTest is Test {
         cmd[2] = vm.toString(fakeChainBAddress);
         cmd[3] = vm.toString(block.chainid);
         cmd[4] = vm.toString(channelId);
-        bytes memory result = vm.ffi(cmd);
-        string memory json = string(result);
-
-        uint256[] memory aArr = vm.parseJsonUintArray(json, ".a");
-        uint256[] memory b0Arr = vm.parseJsonUintArray(json, ".b0");
-        uint256[] memory b1Arr = vm.parseJsonUintArray(json, ".b1");
-        uint256[] memory cArr = vm.parseJsonUintArray(json, ".c");
-        uint256[] memory pubArr = vm.parseJsonUintArray(json, ".pubSignals");
-        uint256[2] memory a = [aArr[0], aArr[1]];
-        uint256[2][2] memory b = [[b0Arr[0], b0Arr[1]], [b1Arr[0], b1Arr[1]]];
-        uint256[2] memory c = [cArr[0], cArr[1]];
-        uint256[11] memory pubSignals;
-        for (uint256 i = 0; i < 11; i++) {
-            pubSignals[i] = pubArr[i];
-        }
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
+            _runProveScript(cmd);
 
         vm.prank(partyA);
         vm.expectRevert(PaymentChannel.DomainMismatch.selector);
         channel.closeWithProof(channelId, a, b, c, pubSignals);
+    }
+
+    // -------------------------------------------------------------------
+    // Chaining: a channel's off-chain history spans MORE than one proof's
+    // worth of updates (`steps` = 4 per proof, see channel_state.circom).
+    // A second proof continues from the first's committed final state
+    // instead of re-proving the whole history from genesis — see
+    // _verifyChannelProof's doc comment and channel_state.circom's
+    // "Chaining" section.
+    // -------------------------------------------------------------------
+
+    function test_challengeWithProof_chainsFromPriorCommitment_pastFourUpdates() public {
+        uint256 channelId = _openRealChannel();
+
+        // Proof 1: genesis-anchored, 4 updates (nonces 1,2,5,6 — the
+        // circuits/ DEFAULT_UPDATES fixture), ending at (400_000, 1_600_000).
+        (uint256[2] memory a1, uint256[2][2] memory b1, uint256[2] memory c1, uint256[11] memory pub1) =
+            _generateProof(channelId);
+        vm.prank(partyA);
+        channel.closeWithProof(channelId, a1, b1, c1, pub1);
+
+        PaymentChannel.Channel memory chAfter1 = channel.getChannel(channelId);
+        assertEq(chAfter1.nonce, 6);
+        assertTrue(chAfter1.balancesCommitted);
+
+        // Proof 2: CONTINUES from proof 1's committed end state — 4 MORE
+        // updates (nonces 7,8,9,10) that a single `steps=4` proof could
+        // never have covered together with proof 1's 4 in one shot. Real
+        // Groth16 proof, generated via a second, independent FFI call with
+        // explicit --start-* / --updates overrides (see
+        // scripts/build_ffi_input_continuation.ts).
+        string[] memory cmd = new string[](5);
+        cmd[0] = "bash";
+        cmd[1] = "../circuits/scripts/prove_and_export_continuation.sh";
+        cmd[2] = vm.toString(address(channel));
+        cmd[3] = vm.toString(block.chainid);
+        cmd[4] = vm.toString(channelId);
+        (uint256[2] memory a2, uint256[2][2] memory b2, uint256[2] memory c2, uint256[11] memory pub2) =
+            _runProveScript(cmd);
+
+        // The continuation proof's startNonce/startCommitment must exactly
+        // match proof 1's outNonce/endCommitment — the on-chain link.
+        assertEq(pub2[10], chAfter1.nonce, "continuation proof's startNonce must match proof 1's outNonce");
+        assertEq(
+            pub2[1],
+            chAfter1.balanceCommitment,
+            "continuation proof's startCommitment must match proof 1's endCommitment"
+        );
+
+        vm.prank(partyB);
+        channel.challengeWithProof(channelId, a2, b2, c2, pub2);
+
+        PaymentChannel.Channel memory chAfter2 = channel.getChannel(channelId);
+        assertEq(chAfter2.nonce, 10, "chained proof must advance past what proof 1 alone could reach");
+        assertTrue(chAfter2.balancesCommitted);
+        assertEq(chAfter2.balanceCommitment, pub2[2]);
+
+        // Settle: withdraw using the SECOND proof's opening (100_000/1_900_000
+        // — see scripts/build_ffi_input_continuation.ts's fixture).
+        vm.warp(block.timestamp + channel.CHALLENGE_PERIOD() + 1);
+        uint256 balABefore = partyA.balance;
+        uint256 balBBefore = partyB.balance;
+        vm.prank(partyA);
+        channel.withdrawWithOpening(channelId, 100_000, 1_900_000, DEFAULT_BLINDING);
+        assertEq(partyA.balance, balABefore + 100_000);
+        assertEq(partyB.balance, balBBefore + 1_900_000);
+    }
+
+    /// @notice A continuation proof claiming a DIFFERENT (wrong) start
+    ///         commitment than the channel's actual stored one must be
+    ///         rejected — otherwise chaining would let anyone splice in an
+    ///         arbitrary alternate history at the join point.
+    function test_challengeWithProof_revertsOnWrongContinuationAnchor() public {
+        uint256 channelId = _openRealChannel();
+        (uint256[2] memory a1, uint256[2][2] memory b1, uint256[2] memory c1, uint256[11] memory pub1) =
+            _generateProof(channelId);
+        vm.prank(partyA);
+        channel.closeWithProof(channelId, a1, b1, c1, pub1);
+
+        string[] memory cmd = new string[](5);
+        cmd[0] = "bash";
+        cmd[1] = "../circuits/scripts/prove_and_export_continuation.sh";
+        cmd[2] = vm.toString(address(channel));
+        cmd[3] = vm.toString(block.chainid);
+        cmd[4] = vm.toString(channelId);
+        (uint256[2] memory a2, uint256[2][2] memory b2, uint256[2] memory c2, uint256[11] memory pub2) =
+            _runProveScript(cmd);
+
+        pub2[1] = pub2[1] + 1; // tamper with startCommitment — no longer matches proof 1's endCommitment
+
+        vm.prank(partyB);
+        vm.expectRevert(PaymentChannel.InvalidChainAnchor.selector);
+        channel.challengeWithProof(channelId, a2, b2, c2, pub2);
     }
 }

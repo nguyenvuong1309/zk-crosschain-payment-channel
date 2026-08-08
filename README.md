@@ -44,19 +44,31 @@ beacon node độc lập thật**, chỉ tin khi ≥2/3 đồng ý (`bls-validat
 — không còn tin mù 1 node duy nhất. Không dùng thư viện light-client ngoài
 nào. Chi tiết đầy đủ: `PLAN.md` Milestone 5.
 
-67 test Foundry pass (`forge test`, cần `--ffi`), cộng thêm test hình thức
+82 test Foundry pass (`forge test`, cần `--ffi`), cộng thêm test hình thức
 Halmos (`contracts/test/PaymentChannel.formal.t.sol`) và test Rust cho
 circuit Halo2 (`circuits-halo2/`, `cargo test`).
 
 **Nâng cấp privacy (sau Milestone 5)**: `closeWithProof`/`challengeWithProof`
 không còn để lộ số dư cuối cùng làm public signal — `channel_state.circom`
-giờ output `balanceCommitment = Poseidon(outBalanceA, outBalanceB, blinding)`
+giờ output `endCommitment = Poseidon(outBalanceA, outBalanceB, blinding)`
 thay vì 2 số dư trần. Mở commitment (bắt buộc phải lộ để rút tiền thật) chỉ
 xảy ra ở `withdrawWithOpening()`, verify on-chain bằng 1 contract Poseidon(3)
 riêng (bytecode sinh từ `circomlibjs`, ~53K gas — xem `contracts/src/PoseidonT4.sol`).
 Giới hạn cố ý: số dư vẫn lộ tại thời điểm rút — không thể tránh khi settlement
 thật chuyển đúng số tiền on-chain; giá trị của nâng cấp là ẩn lịch sử trung
 gian và ẩn số dư trong suốt `CHALLENGE_PERIOD`.
+
+**Proof nối chuỗi — bỏ giới hạn cứng 4-update/proof (sau nâng cấp privacy)**:
+`channel_state.circom` thêm 2 public signal `startNonce`/`startCommitment` —
+mỗi proof neo vào HOẶC deposit gốc của kênh (proof đầu tiên) HOẶC
+`balanceCommitment` on-chain của proof TRƯỚC đó (proof tiếp theo, dùng
+`challengeWithProof`). `startCommitment`/`endCommitment` dùng chung công thức
+Poseidon(3) nên contract chỉ so sánh bằng trực tiếp, không cần biết balance
+thật ở điểm nối — không lộ gì thêm so với thiết kế 1-proof cũ. Mỗi proof vẫn
+chỉ tốn đúng `steps=4` constraint bất kể lịch sử kênh dài bao nhiêu (khác
+với chỉ tăng `steps`, vẫn có giới hạn cứng, chỉ cao hơn). Test thật: 2 proof
+Groth16 thật nối chuỗi, nonce 6→10, settle đúng — xem
+`contracts/test/ChannelStateProof.t.sol`.
 
 **Watchtower staking/slashing (`contracts/src/WatchtowerRegistry.sol`)**:
 watchtower giờ có thể "để tiền vào cửa" — `stake()` khoá ETH cho 1 channel cụ

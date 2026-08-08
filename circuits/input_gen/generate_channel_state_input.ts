@@ -23,8 +23,8 @@ async function main() {
     channelId: 1n,
     contractAddress: BigInt(contractAddressArg),
     chainId: BigInt(chainIdArg),
-    initBalanceA: 1_000_000n,
-    initBalanceB: 1_000_000n,
+    startBalanceA: 1_000_000n,
+    startBalanceB: 1_000_000n,
   });
 
   console.log(JSON.stringify(input, null, 2));

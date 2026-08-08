@@ -9,12 +9,13 @@ include "circomlib/circuits/bitify.circom";
 ///
 /// Proves: "there exists a chain of `steps` off-chain payment-channel updates,
 /// each signed by BOTH parties, with strictly increasing nonces and constant
-/// total balance, starting from the channel's on-chain deposits and ending at
-/// the claimed final state."
+/// total balance, starting from SOME anchor state and ending at the claimed
+/// final state." The anchor can be either the channel's genesis deposits
+/// (nonce 0) or a PRIOR proof's committed final state — see "Chaining" below.
 ///
-/// This lets a payment channel settle on-chain with a single constant-size
-/// proof instead of replaying/verifying every off-chain signature — the core
-/// value of Milestone 2 (see PLAN.md).
+/// This lets a payment channel settle on-chain with a constant-size proof
+/// per `steps` updates instead of replaying/verifying every off-chain
+/// signature — the core value of Milestone 2 (see PLAN.md).
 ///
 /// Off-chain identity note: signatures here are EdDSA (Baby Jubjub, Poseidon
 /// hash) — NOT the ECDSA/secp256k1 keys used to sign Ethereum transactions.
@@ -26,27 +27,52 @@ include "circomlib/circuits/bitify.circom";
 ///   channelId         - binds this proof to one specific on-chain channel
 ///   pubKeyAx/Ay       - partyA's registered EdDSA public key
 ///   pubKeyBx/By       - partyB's registered EdDSA public key
-///   initBalanceA/B    - starting balances (must equal the channel's deposits)
 ///   contractAddress   - the PaymentChannel deployment this proof is bound to
 ///   chainId           - the chain that deployment lives on
+///   startNonce        - the nonce this proof's internal chain starts from
+///                        (0 for a genesis-anchored proof; the on-chain
+///                        channel's current `nonce` for a continuation proof
+///                        — see "Chaining" below)
 ///   outNonce          - nonce of the final state reached by the chain
-///   balanceCommitment - Poseidon(outBalanceA, outBalanceB, blinding) — see
-///                        below for why this replaces plain outBalanceA/B
+///   startCommitment   - Poseidon(startBalanceA, startBalanceB, startBlinding)
+///   endCommitment     - Poseidon(outBalanceA, outBalanceB, endBlinding)
 ///
-/// **Privacy note (upgrade over the original design)**: the final balances
-/// are NOT public signals anymore. Only a Poseidon commitment to them is.
-/// This hides the settled split between the two parties from anyone merely
-/// watching the chain at close time — intermediate off-chain history was
-/// already private (that's the whole point of this circuit), but the old
-/// version still leaked the final numbers as plain public inputs, defeating
-/// that privacy at the last step. The contract accepts this commitment when
-/// closing the channel (status becomes CHALLENGE_PERIOD without knowing the
-/// split), and only requires it to be opened — `outBalanceA`, `outBalanceB`,
-/// `blinding` revealed and checked against the commitment on-chain — at
-/// `withdraw()` time, since real funds must be moved to real amounts then.
-/// That reveal is unavoidable for an on-chain settlement (see PLAN.md); what
-/// this buys is hiding the number for the `CHALLENGE_PERIOD` duration and
-/// removing it from `closeWithProof`/`challengeWithProof` calldata.
+/// **Privacy note**: balances are NEVER public signals, at either end of the
+/// chain — only Poseidon commitments to them are. Off-chain history was
+/// already private (that's the whole point of this circuit); this hides the
+/// settled split at proof-boundary time too, including every intermediate
+/// checkpoint in a chained proof sequence (see "Chaining"), not just the
+/// very first version of this circuit's final state. The contract only
+/// requires a commitment opened — balances + blinding revealed and checked
+/// on-chain — at `withdraw()` time, since real funds must move to real
+/// amounts then; that reveal is unavoidable for on-chain settlement (see
+/// PLAN.md). What this buys is hiding every number for as long as possible.
+///
+/// **Chaining (steps > `steps` per proof)**: a channel with more off-chain
+/// updates than fit in one proof's `steps` submits SEVERAL proofs instead of
+/// one, each covering the NEXT `steps` updates:
+///   - The first proof anchors to genesis: `startNonce = 0`, and
+///     `startCommitment` must equal `Poseidon(depositA, depositB, 0)` — a
+///     fixed, publicly-computable value (deposits are already public at
+///     `open()` time, and `0` is a fixed canonical blinding for this one
+///     anchor case, not a secret — nothing new is hidden or leaked here).
+///     Checked on-chain in `PaymentChannel._verifyChannelProof`.
+///   - Every SUBSEQUENT proof anchors to the PRIOR proof's own
+///     `endCommitment`/`outNonce`: `startNonce` must equal the channel's
+///     currently-posted `nonce`, and `startCommitment` must equal the
+///     channel's currently-posted `balanceCommitment` — both already stored
+///     on-chain by the prior proof's `closeWithProof`/`challengeWithProof`
+///     call, so the contract can check equality directly without ever
+///     learning the actual balances. This is why `startCommitment` and
+///     `endCommitment` use the EXACT SAME formula (`Poseidon(balanceA,
+///     balanceB, blinding)`, 3 inputs, no nonce) — a later proof's start
+///     must be checkable against an earlier proof's end with a plain
+///     equality, not a re-derivation.
+///   Each proof only costs `steps` worth of constraints regardless of how
+///   many proofs a channel's full history eventually takes — the whole
+///   point of chaining instead of just raising `steps` (which still hits a
+///   hard wall eventually, only a higher one, and makes EVERY proof pay for
+///   the worst case).
 ///
 /// `contractAddress`/`chainId` are a domain separator, mirroring
 /// PaymentChannel.sol's `hashState()` (see its doc comment for why): without
@@ -58,14 +84,20 @@ include "circomlib/circuits/bitify.circom";
 /// domain-bound, not just the proof's public inputs.
 ///
 /// Private signals (witness, supplied by whichever party generates the proof):
+///   startBalanceA/B, startBlinding                      - the anchor state
+///     this proof's chain starts from (channel deposits for a genesis proof;
+///     whatever a prior proof's endCommitment opens to, for a continuation
+///     proof — the prover must already know this to have generated that
+///     prior proof, or have received it from whoever did).
 ///   nonce[steps], balanceA[steps], balanceB[steps]      - each update's state
 ///   sigA_{S,R8x,R8y}[steps], sigB_{S,R8x,R8y}[steps]    - both signatures
-///   blinding                                            - random scalar,
-///     chosen by the prover, that blinds `balanceCommitment` (without it, the
+///   endBlinding                                         - random scalar,
+///     chosen by the prover, that blinds `endCommitment` (without it, the
 ///     commitment would be trivially brute-forceable since balances are
 ///     small, bounded integers — Poseidon isn't hiding on its own for a
-///     low-entropy input). The prover must remember `blinding` to withdraw
-///     later; losing it means losing the ability to open the commitment (see
+///     low-entropy input). The prover must remember `endBlinding` to
+///     withdraw later (or to generate the NEXT chained proof) — losing it
+///     means losing the ability to open/continue from this commitment (see
 ///     PaymentChannel.sol's `withdrawWithOpening`).
 template ChannelStateTransition(steps) {
     // ---- public ----
@@ -74,19 +106,23 @@ template ChannelStateTransition(steps) {
     signal input pubKeyAy;
     signal input pubKeyBx;
     signal input pubKeyBy;
-    signal input initBalanceA;
-    signal input initBalanceB;
     signal input contractAddress; // uint160 range, fits comfortably in the field
     signal input chainId;
+    signal input startNonce;
 
     signal output outNonce;
-    signal output balanceCommitment;
+    signal output startCommitment;
+    signal output endCommitment;
 
-    // ---- private witness: the off-chain update history ----
+    // ---- private witness: the anchor + the off-chain update history ----
+    signal input startBalanceA;
+    signal input startBalanceB;
+    signal input startBlinding;
+
     signal input nonce[steps];
     signal input balanceA[steps];
     signal input balanceB[steps];
-    signal input blinding;
+    signal input endBlinding;
 
     signal input sigA_S[steps];
     signal input sigA_R8x[steps];
@@ -98,7 +134,7 @@ template ChannelStateTransition(steps) {
 
     // total value locked in the channel; must be conserved across every step
     signal totalDeposit;
-    totalDeposit <== initBalanceA + initBalanceB;
+    totalDeposit <== startBalanceA + startBalanceB;
 
     // RANGE_BITS bounds each balance AND nonce to prevent field-overflow
     // tricks (e.g. balanceA = p - 1 wrapping conservation checks, or nonce
@@ -106,6 +142,13 @@ template ChannelStateTransition(steps) {
     // far beyond any realistic wei/token amount or update counter used in
     // this demo.
     var RANGE_BITS = 64;
+
+    component startBalanceARangeCheck = Num2Bits(RANGE_BITS);
+    startBalanceARangeCheck.in <== startBalanceA;
+    component startBalanceBRangeCheck = Num2Bits(RANGE_BITS);
+    startBalanceBRangeCheck.in <== startBalanceB;
+    component startNonceRangeCheck = Num2Bits(RANGE_BITS);
+    startNonceRangeCheck.in <== startNonce;
 
     component balanceARangeCheck[steps];
     component balanceBRangeCheck[steps];
@@ -116,7 +159,11 @@ template ChannelStateTransition(steps) {
     component verifyB[steps];
 
     signal prevNonce[steps + 1];
-    prevNonce[0] <== 0;
+    // Chaining: starts at 0 for a genesis-anchored proof, or the prior
+    // proof's outNonce for a continuation proof — see this template's doc
+    // comment. Either way, PaymentChannel.sol checks `startNonce` against
+    // the right on-chain value before trusting anything downstream of it.
+    prevNonce[0] <== startNonce;
 
     for (var i = 0; i < steps; i++) {
         // --- range-check balances so they can't silently underflow/overflow
@@ -189,19 +236,26 @@ template ChannelStateTransition(steps) {
 
     outNonce <== nonce[steps - 1];
 
-    // Commit to the final balances instead of exposing them as public
-    // signals — see the doc comment above. `blinding` is unconstrained here
-    // beyond being included in the hash; its only job is adding entropy the
-    // verifier can't guess, so 2 low-value balances don't make the
-    // commitment brute-forceable.
-    component finalBalanceCommitment = Poseidon(3);
-    finalBalanceCommitment.inputs[0] <== balanceA[steps - 1];
-    finalBalanceCommitment.inputs[1] <== balanceB[steps - 1];
-    finalBalanceCommitment.inputs[2] <== blinding;
-    balanceCommitment <== finalBalanceCommitment.out;
+    // Same 3-input Poseidon formula at both ends of the chain on purpose —
+    // see this template's doc comment on Chaining: it's what lets the
+    // contract check "does proof N+1's start match proof N's end" with a
+    // plain field equality, no re-derivation.
+    component startCommitmentHash = Poseidon(3);
+    startCommitmentHash.inputs[0] <== startBalanceA;
+    startCommitmentHash.inputs[1] <== startBalanceB;
+    startCommitmentHash.inputs[2] <== startBlinding;
+    startCommitment <== startCommitmentHash.out;
+
+    component endCommitmentHash = Poseidon(3);
+    endCommitmentHash.inputs[0] <== balanceA[steps - 1];
+    endCommitmentHash.inputs[1] <== balanceB[steps - 1];
+    endCommitmentHash.inputs[2] <== endBlinding;
+    endCommitment <== endCommitmentHash.out;
 }
 
-// Fixed to 4 off-chain updates per proof for this demo. A channel with more
-// history than that submits several proofs chained by (initBalance == prior
-// outBalance) — not implemented here, see PLAN.md Milestone 2 TODOs.
-component main {public [channelId, pubKeyAx, pubKeyAy, pubKeyBx, pubKeyBy, initBalanceA, initBalanceB, contractAddress, chainId]} = ChannelStateTransition(4);
+// `steps` off-chain updates per proof — a channel with more history than
+// that submits several proofs, chained via startCommitment/startNonce
+// matching the prior proof's endCommitment/outNonce (see this file's doc
+// comment on Chaining). This is what makes the true per-proof limit
+// unbounded in aggregate, unlike simply raising this constant.
+component main {public [channelId, pubKeyAx, pubKeyAy, pubKeyBx, pubKeyBy, contractAddress, chainId, startNonce]} = ChannelStateTransition(4);

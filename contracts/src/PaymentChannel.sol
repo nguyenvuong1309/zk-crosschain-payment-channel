@@ -10,18 +10,21 @@ import {IPoseidonT4, PoseidonT4Deployer} from "./PoseidonT4.sol";
 ///         circuits/circuits/channel_state.circom. Public signal layout
 ///         (circom always emits outputs first, then public inputs in
 ///         `component main {public [...]}` declaration order):
-///           [0]  outNonce            [5]  pubKeyBx
-///           [1]  balanceCommitment   [6]  pubKeyBy
-///           [2]  channelId           [7]  initBalanceA
-///           [3]  pubKeyAx            [8]  initBalanceB
-///           [4]  pubKeyAy            [9]  contractAddress
-///                                    [10] chainId
+///           [0]  outNonce            [6]  pubKeyBx
+///           [1]  startCommitment     [7]  pubKeyBy
+///           [2]  endCommitment       [8]  contractAddress
+///           [3]  channelId           [9]  chainId
+///           [4]  pubKeyAx            [10] startNonce
+///           [5]  pubKeyAy
 /// `contractAddress`/`chainId` are the domain separator baked into the
 /// signed message inside the circuit — see channel_state.circom.
-/// `balanceCommitment = Poseidon(outBalanceA, outBalanceB, blinding)` — the
-/// final balances are NOT revealed by this proof, only committed to (see
-/// channel_state.circom's doc comment, and `withdrawWithOpening` below for
-/// where they're eventually revealed).
+/// `startCommitment`/`endCommitment` are both `Poseidon(balanceA, balanceB,
+/// blinding)` — the SAME 3-input formula at both ends of the chain on
+/// purpose (see channel_state.circom's doc comment on "Chaining"): balances
+/// are never revealed by a proof, only committed to, and a later proof's
+/// `startCommitment`/`startNonce` must match an earlier proof's
+/// `endCommitment`/`outNonce` (or the channel's genesis deposits, for the
+/// first proof in a chain) — see `_verifyChannelProof`.
 interface IChannelStateVerifier {
     function verifyProof(
         uint256[2] calldata _pA,
@@ -179,7 +182,7 @@ contract PaymentChannel {
     error ZeroAddress();
     error InvalidProof();
     error PublicKeyMismatch();
-    error InitialBalanceMismatch();
+    error InvalidChainAnchor();
     error NothingToClaim();
     error ClaimTransferFailed();
     error DomainMismatch();
@@ -591,8 +594,9 @@ contract PaymentChannel {
     }
 
     /// @notice Verifies a channel_state.circom proof against this channel's
-    ///         registered identity/deposits, and decodes its public outputs.
-    ///         See `IChannelStateVerifier` for the public signal layout.
+    ///         registered identity/deposits/anchor state, and decodes its
+    ///         public outputs. See `IChannelStateVerifier` for the public
+    ///         signal layout.
     /// @dev Domain-bound: `contractAddress`/`chainId` are checked against
     ///      `address(this)`/`block.chainid`, mirroring `hashState`'s domain
     ///      separator on the raw-signature path — without this, a proof
@@ -602,6 +606,24 @@ contract PaymentChannel {
     ///      These fields are baked into the signed message INSIDE the
     ///      circuit (see channel_state.circom), not just carried as unchecked
     ///      public signals, so the binding is enforced cryptographically.
+    ///
+    ///      Chaining (see channel_state.circom's doc comment): exactly ONE
+    ///      of two anchors is accepted, selected by `ch.balancesCommitted`:
+    ///        - false (no proof has ever closed this channel yet — it's
+    ///          still ACTIVE, or currently in CHALLENGE_PERIOD via the
+    ///          raw-signature path only): the proof must be genesis-anchored
+    ///          — `startNonce == 0` and `startCommitment ==
+    ///          Poseidon(depositA, depositB, 0)`. `0` is a fixed, publicly
+    ///          computable blinding for this one case (deposits are already
+    ///          public since `open()`/`join()`), not a secret.
+    ///        - true (a prior closeWithProof/challengeWithProof already ran
+    ///          for this channel): the proof must CONTINUE from it —
+    ///          `startNonce == ch.nonce` and `startCommitment ==
+    ///          ch.balanceCommitment`, both already stored on-chain by that
+    ///          prior proof. This is what lets a channel's full off-chain
+    ///          history span arbitrarily many proofs, each only paying for
+    ///          `steps` updates' worth of constraints, instead of a single
+    ///          proof needing to grow with the channel's entire lifetime.
     function _verifyChannelProof(
         Channel storage ch,
         uint256 channelId,
@@ -609,21 +631,26 @@ contract PaymentChannel {
         uint256[2][2] calldata b,
         uint256[2] calldata c,
         uint256[11] calldata pubSignals
-    ) internal view returns (uint256 outNonce, uint256 balanceCommitment) {
-        if (pubSignals[2] != channelId) revert ChannelIdMismatch();
-        if (pubSignals[3] != ch.pubKeyAx || pubSignals[4] != ch.pubKeyAy) revert PublicKeyMismatch();
-        if (pubSignals[5] != ch.pubKeyBx || pubSignals[6] != ch.pubKeyBy) revert PublicKeyMismatch();
-        // The proof always starts its chain from the channel's on-chain
-        // deposits (see PLAN.md Milestone 2 note on chaining proofs across
-        // more than `steps` off-chain updates — not implemented here).
-        if (pubSignals[7] != ch.depositA || pubSignals[8] != ch.depositB) revert InitialBalanceMismatch();
-        if (pubSignals[9] != uint256(uint160(address(this)))) revert DomainMismatch();
-        if (pubSignals[10] != block.chainid) revert DomainMismatch();
+    ) internal view returns (uint256 outNonce, uint256 endCommitment) {
+        if (pubSignals[3] != channelId) revert ChannelIdMismatch();
+        if (pubSignals[4] != ch.pubKeyAx || pubSignals[5] != ch.pubKeyAy) revert PublicKeyMismatch();
+        if (pubSignals[6] != ch.pubKeyBx || pubSignals[7] != ch.pubKeyBy) revert PublicKeyMismatch();
+        if (pubSignals[8] != uint256(uint160(address(this)))) revert DomainMismatch();
+        if (pubSignals[9] != block.chainid) revert DomainMismatch();
+
+        uint256 startCommitment = pubSignals[1];
+        uint256 startNonce = pubSignals[10];
+        if (ch.balancesCommitted) {
+            if (startNonce != ch.nonce || startCommitment != ch.balanceCommitment) revert InvalidChainAnchor();
+        } else {
+            uint256[3] memory genesisOpening = [ch.depositA, ch.depositB, uint256(0)];
+            if (startNonce != 0 || startCommitment != poseidonT4.poseidon(genesisOpening)) revert InvalidChainAnchor();
+        }
 
         if (!channelStateVerifier.verifyProof(a, b, c, pubSignals)) revert InvalidProof();
 
         outNonce = pubSignals[0];
-        balanceCommitment = pubSignals[1];
+        endCommitment = pubSignals[2];
     }
 
     /// @dev Pays out both parties. Deliberately does NOT let one party's

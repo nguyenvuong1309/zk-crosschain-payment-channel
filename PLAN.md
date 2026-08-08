@@ -587,10 +587,24 @@ zk-crosschain-payment-channel/
           số tiền on-chain. Giá trị thật: ẩn lịch sử trung gian VÀ ẩn số dư
           trong suốt `CHALLENGE_PERIOD` (trước đây lộ ngay lúc
           `closeWithProof`).
-- [ ] Lưu ý kỹ thuật cho bước tiếp: circuit cố định `steps = 4` — kênh có
-      nhiều hơn 4 update off-chain phải nộp nhiều proof nối tiếp
-      (`initBalance` của proof sau = `outBalance` của proof trước), hoặc
-      tăng `steps` và chấp nhận constraint/proving-time tăng tuyến tính.
+- [x] ~~Lưu ý kỹ thuật cho bước tiếp: circuit cố định `steps = 4` — kênh có
+      nhiều hơn 4 update off-chain phải nộp nhiều proof nối tiếp~~ — **Đã
+      làm (nâng cấp sau Milestone 5, cùng đợt với privacy upgrade)**.
+      `channel_state.circom` giờ có 2 public signal mới `startNonce` +
+      `startCommitment` (thay `initBalanceA/B` cũ) — mỗi proof neo vào HOẶC
+      deposit gốc của kênh (`startNonce=0`, proof đầu tiên) HOẶC
+      `balanceCommitment` của proof TRƯỚC đó đã lưu on-chain (proof tiếp
+      theo, nối chuỗi). `startCommitment`/`endCommitment` dùng CHUNG công
+      thức Poseidon(3 input) nên contract chỉ cần so sánh bằng trực tiếp,
+      không cần biết balance thật ở điểm nối. Mỗi proof vẫn chỉ tốn đúng
+      `steps=4` constraint bất kể lịch sử kênh dài bao nhiêu — khác với chỉ
+      tăng `steps` (vẫn có giới hạn cứng, chỉ là cao hơn). Contract:
+      `_verifyChannelProof` chọn anchor theo `ch.balancesCommitted`, lỗi mới
+      `InvalidChainAnchor`. Test thật: `test_challengeWithProof_chains
+      FromPriorCommitment_pastFourUpdates` — 2 proof Groth16 thật nối
+      chuỗi, nonce 6→10 (vượt giới hạn 4-update của 1 proof), settle đúng
+      state cuối cùng. Trusted setup phase 2 chạy lại (3 contribution,
+      `ZKey Ok!`), verifier Solidity export lại.
 
 **Milestone 3**: scaffold đã tạo (`relayer/`, `chains/`), chưa có logic —
 đang chờ Milestone 2 xong trước khi bắt đầu circuit `consensus_proof.circom`.
