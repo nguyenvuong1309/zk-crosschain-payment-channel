@@ -6,6 +6,15 @@ import {PaymentChannel, IChannelStateVerifier, ILightClientVerifier} from "../sr
 import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 import {WatchtowerRegistry} from "../src/WatchtowerRegistry.sol";
 
+/// @notice A "receiver" that always reverts — models a malicious or broken
+///         channel party used to exercise the slash() poison-pill fix.
+///         Mirrors PaymentChannelSecurityFixes.t.sol's RevertingReceiver.
+contract RevertingReceiver {
+    receive() external payable {
+        revert("nope");
+    }
+}
+
 contract WatchtowerRegistryTest is Test {
     PaymentChannel channel;
     Groth16Verifier verifier;
@@ -289,5 +298,49 @@ contract WatchtowerRegistryTest is Test {
 
         vm.expectRevert(WatchtowerRegistry.WatchtowerNotNegligent.selector);
         registry.slash(channelId, watchtower);
+    }
+
+    /// @notice Regression test for a real finding from /code-review: slash()
+    ///         must NOT be revert-able by a channel party (or the caller)
+    ///         whose address rejects ETH — pre-fix, `_send` reverted the
+    ///         whole `slash()` call in that case, permanently immunizing a
+    ///         negligent watchtower whenever either party's address happens
+    ///         to reject direct transfers. Mirrors
+    ///         PaymentChannelSecurityFixesTest.test_closeCooperative_stillPaysHonestParty_whenCounterpartyRejectsEth.
+    function test_slash_stillSlashes_whenPartyBRejectsEth() public {
+        uint256 channelId = _openAndJoin(1 ether, 1 ether);
+
+        vm.prank(watchtower);
+        registry.stake{value: 1 ether}(channelId);
+        vm.prank(watchtower);
+        registry.commitCheckpoint(channelId, 2, keccak256("state at nonce 2"));
+
+        PaymentChannel.ChannelState memory stale = _state(channelId, 1, 0.9 ether, 1.1 ether);
+        bytes memory staleSigA = _sign(partyAKey, stale);
+        bytes memory staleSigB = _sign(partyBKey, stale);
+        vm.prank(partyA);
+        channel.closeUnilateral(stale, staleSigA, staleSigB);
+
+        vm.warp(block.timestamp + channel.CHALLENGE_PERIOD() + 1);
+        vm.prank(partyA);
+        channel.withdraw(channelId);
+        assertEq(uint256(channel.getChannel(channelId).status), uint256(PaymentChannel.Status.CLOSED));
+
+        // NOW turn partyB's address into a contract that rejects ETH — must
+        // not be able to block slash() from confiscating the watchtower's
+        // stake and paying out the bounty + partyA's share.
+        vm.etch(partyB, address(new RevertingReceiver()).code);
+
+        uint256 partyABefore = partyA.balance;
+        uint256 randoBefore = rando.balance;
+
+        vm.prank(rando);
+        registry.slash(channelId, watchtower);
+
+        assertEq(registry.stakes(channelId, watchtower), 0, "stake must still be fully confiscated");
+        assertEq(rando.balance, randoBefore + 0.1 ether, "caller still earns bounty directly");
+        assertEq(partyA.balance, partyABefore + 0.45 ether, "partyA still paid directly");
+        // ...and partyB's share is credited instead of reverting the whole slash.
+        assertEq(registry.pendingCredits(partyB), 0.45 ether);
     }
 }

@@ -44,7 +44,7 @@ beacon node độc lập thật**, chỉ tin khi ≥2/3 đồng ý (`bls-validat
 — không còn tin mù 1 node duy nhất. Không dùng thư viện light-client ngoài
 nào. Chi tiết đầy đủ: `PLAN.md` Milestone 5.
 
-82 test Foundry pass (`forge test`, cần `--ffi`), cộng thêm test hình thức
+84 test Foundry pass (`forge test`, cần `--ffi`), cộng thêm test hình thức
 Halmos (`contracts/test/PaymentChannel.formal.t.sol`) và test Rust cho
 circuit Halo2 (`circuits-halo2/`, `cargo test`).
 
@@ -78,11 +78,19 @@ biết state mới hơn nhưng không hành động" thành chứng minh đượ
 Nếu channel đóng CLOSED ở nonce THẤP HƠN nonce watchtower đã cam kết, bất kỳ
 ai cũng permissionless gọi `slash()` — 10% stake thưởng người gọi, phần còn
 lại chia đều cho 2 party bị hại. `unstake()` bị khoá `UNSTAKE_COOLDOWN` (1
-ngày) sau khi channel CLOSED để `slash()` luôn có quyền ưu tiên. 12/12 test
+ngày) sau khi channel CLOSED để `slash()` luôn có quyền ưu tiên. 14/14 test
 pass (`test/WatchtowerRegistry.t.sol`). Giới hạn ghi rõ: chỉ phạt được nếu
 watchtower TỰ cam kết on-chain rồi không hành động — 1 watchtower không bao
 giờ commit gì thì không thể bị slash bằng cơ chế này (nhưng cũng không có
 lịch sử cam kết nào để chứng minh uy tín — tự nó là tín hiệu).
+
+**Fix (từ `/code-review`)**: `slash()` ban đầu dùng push-payment revert-nếu-fail
+(`_send`) cho phần thưởng của cả 2 party — cùng lớp lỗi đã vá ở
+`PaymentChannel._creditOrSend`. Một watchtower bội tín có thể tự miễn nhiễm
+slashing vĩnh viễn bằng cách 1 trong 2 party của channel là contract có
+fallback revert. Đã vá bằng `_creditOrSend` (pull-payment, `pendingCredits`
++ `claim()`), mirror y hệt cơ chế đã có trong `PaymentChannel.sol` — xem
+test regression `test_slash_stillSlashes_whenPartyBRejectsEth`.
 
 ## Cấu trúc
 

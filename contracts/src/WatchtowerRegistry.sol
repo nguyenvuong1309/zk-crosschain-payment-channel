@@ -92,6 +92,11 @@ contract WatchtowerRegistry {
     // (0 if never observed yet) — see UNSTAKE_COOLDOWN.
     mapping(uint256 => uint256) public closedObservedAt;
 
+    /// @notice Funds `slash()` couldn't push directly to a recipient (bounty
+    ///         caller or either channel party) — see `_creditOrSend`. Claim
+    ///         via `claim()`.
+    mapping(address => uint256) public pendingCredits;
+
     event Staked(uint256 indexed channelId, address indexed watchtower, uint256 amount);
     event Unstaked(uint256 indexed channelId, address indexed watchtower, uint256 amount);
     event CheckpointCommitted(uint256 indexed channelId, address indexed watchtower, uint256 nonce, bytes32 stateHash);
@@ -102,6 +107,8 @@ contract WatchtowerRegistry {
         uint256 partyShare,
         address indexed caller
     );
+    event PayoutCredited(address indexed to, uint256 amount);
+    event Claimed(address indexed to, uint256 amount);
 
     error BelowMinStake();
     error NothingStaked();
@@ -112,6 +119,8 @@ contract WatchtowerRegistry {
     error TransferFailed();
     error UnstakeCooldownActive();
     error NotYetObserved();
+    error NothingToClaim();
+    error ClaimTransferFailed();
 
     constructor(PaymentChannel _paymentChannel) {
         paymentChannel = _paymentChannel;
@@ -225,9 +234,29 @@ contract WatchtowerRegistry {
 
         emit Slashed(channelId, watchtower, bounty, partyShare, msg.sender);
 
-        _send(msg.sender, bounty);
-        _send(ch.partyA, partyA_share);
-        _send(ch.partyB, partyB_share);
+        // Deliberately does NOT let one recipient's broken/malicious receive
+        // path revert the whole slash — each transfer is independent,
+        // falling back to a claimable credit (`pendingCredits`) rather than
+        // reverting the whole call. Without this, a negligent watchtower
+        // could permanently immunize itself from slashing by making itself
+        // (or colluding with) a channel party whose address rejects ETH —
+        // see PaymentChannel._creditOrSend, which this mirrors.
+        _creditOrSend(msg.sender, bounty);
+        _creditOrSend(ch.partyA, partyA_share);
+        _creditOrSend(ch.partyB, partyB_share);
+    }
+
+    /// @notice Claim any funds that couldn't be pushed directly during a
+    ///         `slash()` payout (see `_creditOrSend`).
+    function claim() external {
+        uint256 amount = pendingCredits[msg.sender];
+        if (amount == 0) revert NothingToClaim();
+        pendingCredits[msg.sender] = 0;
+
+        (bool ok,) = msg.sender.call{value: amount}("");
+        if (!ok) revert ClaimTransferFailed();
+
+        emit Claimed(msg.sender, amount);
     }
 
     /// @dev Reverts unless `channelId` is currently CLOSED; records (once)
@@ -249,5 +278,19 @@ contract WatchtowerRegistry {
         if (amount == 0) return;
         (bool ok,) = to.call{value: amount}("");
         if (!ok) revert TransferFailed();
+    }
+
+    /// @dev Attempts a direct push transfer with a bounded gas stipend (so a
+    ///      malicious recipient can't grief via unbounded gas consumption
+    ///      either). On failure, credits `pendingCredits` instead of
+    ///      reverting, so the OTHER recipients' shares in the same `slash()`
+    ///      call are never blocked. The recipient (or anyone, on their
+    ///      behalf) can later call `claim()`.
+    function _creditOrSend(address to, uint256 amount) internal {
+        if (amount == 0) return;
+        (bool ok,) = to.call{value: amount, gas: 30_000}("");
+        if (ok) return;
+        pendingCredits[to] += amount;
+        emit PayoutCredited(to, amount);
     }
 }
