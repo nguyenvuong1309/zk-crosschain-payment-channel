@@ -54,13 +54,12 @@ contract PaymentChannelTest is Test {
 
     function test_openAndJoin_setsActive() public {
         uint256 channelId = _openAndJoin(1 ether, 1 ether);
-        (,, uint256 depositA, uint256 depositB, PaymentChannel.Status status,, uint256 balA, uint256 balB,,,,,) =
-            channel.channels(channelId);
-        assertEq(depositA, 1 ether);
-        assertEq(depositB, 1 ether);
-        assertEq(uint256(status), uint256(PaymentChannel.Status.ACTIVE));
-        assertEq(balA, 1 ether);
-        assertEq(balB, 1 ether);
+        PaymentChannel.Channel memory ch = channel.getChannel(channelId);
+        assertEq(ch.depositA, 1 ether);
+        assertEq(ch.depositB, 1 ether);
+        assertEq(uint256(ch.status), uint256(PaymentChannel.Status.ACTIVE));
+        assertEq(ch.balanceA, 1 ether);
+        assertEq(ch.balanceB, 1 ether);
     }
 
     function test_cooperativeClose_settlesFinalBalances() public {
@@ -81,8 +80,7 @@ contract PaymentChannelTest is Test {
         assertEq(partyA.balance, balABefore + 0.7 ether);
         assertEq(partyB.balance, balBBefore + 1.3 ether);
 
-        (,,,, PaymentChannel.Status status,,,,,,,,) = channel.channels(channelId);
-        assertEq(uint256(status), uint256(PaymentChannel.Status.CLOSED));
+        assertEq(uint256(channel.getChannel(channelId).status), uint256(PaymentChannel.Status.CLOSED));
     }
 
     function test_cooperativeClose_revertsOnBadSignature() public {
@@ -202,10 +200,10 @@ contract PaymentChannelTest is Test {
         vm.prank(watchtower);
         channel.challenge(latestState, latestSigA, latestSigB);
 
-        (,,,,, uint256 nonce, uint256 balA, uint256 balB,,,,,) = channel.channels(channelId);
-        assertEq(nonce, 2);
-        assertEq(balA, 0.2 ether);
-        assertEq(balB, 1.8 ether);
+        PaymentChannel.Channel memory ch = channel.getChannel(channelId);
+        assertEq(ch.nonce, 2);
+        assertEq(ch.balanceA, 0.2 ether);
+        assertEq(ch.balanceB, 1.8 ether);
     }
 
     function test_challenge_revertsOnStaleNonce() public {

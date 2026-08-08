@@ -55,7 +55,7 @@ trước khi dùng cho giá trị thật — xem PLAN.md Milestone 4.
 
 | Circuit | zkey cuối | # contribution | Verify |
 |---|---|---|---|
-| `channel_state.circom` | `build/channel_state_final_v2.zkey` | 3 | `ZKey Ok!` |
+| `channel_state.circom` | `build/channel_state_final.zkey` | 3 | `ZKey Ok!` |
 | `consensus_proof.circom` | `build/consensus_proof_final.zkey` | 3 | `ZKey Ok!` |
 
 Verifier Solidity export lại từ các zkey này:
@@ -73,10 +73,8 @@ curl -o build/powersOfTau28_hez_final_17.ptau \
 
 bash scripts/run_phase2_ceremony.sh channel_state build/powersOfTau28_hez_final_17.ptau 3
 bash scripts/run_phase2_ceremony.sh consensus_proof build/powersOfTau28_hez_final_17.ptau 3
-# lưu ý: zkey của channel_state phải nằm ở build/channel_state_final_v2.zkey
-# (không phải _final.zkey) — xem scripts/prove_and_export.sh
 
-npx snarkjs zkey export solidityverifier build/channel_state_final_v2.zkey /tmp/v.sol
+npx snarkjs zkey export solidityverifier build/channel_state_final.zkey /tmp/v.sol
 npx snarkjs zkey export solidityverifier build/consensus_proof_final.zkey /tmp/vc.sol
 # đổi tên contract trong /tmp/vc.sol thành Groth16VerifierConsensus trước khi copy
 ```

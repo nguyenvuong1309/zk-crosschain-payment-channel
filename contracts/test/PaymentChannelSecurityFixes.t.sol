@@ -132,8 +132,7 @@ contract PaymentChannelSecurityFixesTest is Test {
         // ...and partyB's share is credited instead of reverting the whole close.
         assertEq(channel.pendingWithdrawals(partyB), 1.5 ether);
 
-        (,,,, PaymentChannel.Status status,,,,,,,,) = channel.channels(channelId);
-        assertEq(uint256(status), uint256(PaymentChannel.Status.CLOSED));
+        assertEq(uint256(channel.getChannel(channelId).status), uint256(PaymentChannel.Status.CLOSED));
     }
 
     function test_cancelUnjoined_creditsPartyA_whenPartyAItselfRejectsEth() public {
@@ -151,8 +150,7 @@ contract PaymentChannelSecurityFixesTest is Test {
 
         assertEq(channel.pendingWithdrawals(address(badA)), 1 ether);
 
-        (,,,, PaymentChannel.Status status,,,,,,,,) = channel.channels(channelId);
-        assertEq(uint256(status), uint256(PaymentChannel.Status.CLOSED));
+        assertEq(uint256(channel.getChannel(channelId).status), uint256(PaymentChannel.Status.CLOSED));
     }
 
     function test_claim_paysOutCreditedFunds() public {

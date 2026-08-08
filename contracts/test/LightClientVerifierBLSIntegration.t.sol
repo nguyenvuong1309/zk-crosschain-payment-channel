@@ -75,11 +75,10 @@ contract LightClientVerifierBLSIntegrationTest is Test {
         vm.prank(partyA);
         channelB.closeWithRemoteAttestation(channelId, REMOTE_CONTRACT, REMOTE_CHAIN_ID, state);
 
-        (,,,, PaymentChannel.Status status, uint256 nonce, uint256 balA, uint256 balB,,,,,) =
-            channelB.channels(channelId);
-        assertEq(uint256(status), uint256(PaymentChannel.Status.CHALLENGE_PERIOD));
-        assertEq(nonce, 1);
-        assertEq(balA, 0.5 ether);
-        assertEq(balB, 1.5 ether);
+        PaymentChannel.Channel memory ch = channelB.getChannel(channelId);
+        assertEq(uint256(ch.status), uint256(PaymentChannel.Status.CHALLENGE_PERIOD));
+        assertEq(ch.nonce, 1);
+        assertEq(ch.balanceA, 0.5 ether);
+        assertEq(ch.balanceB, 1.5 ether);
     }
 }

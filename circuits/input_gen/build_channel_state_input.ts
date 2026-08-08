@@ -23,6 +23,10 @@ export const DEFAULT_UPDATES: Update[] = [
   { nonce: 6n, balanceA: 400_000n, balanceB: 1_600_000n },
 ];
 
+// Fixed demo blinding factor — arbitrary but deterministic, see
+// BuildChannelStateInputOptions.blinding.
+export const DEFAULT_BLINDING = 424242424242424242n;
+
 export interface BuildChannelStateInputOptions {
   channelId: bigint;
   contractAddress: bigint;
@@ -32,6 +36,12 @@ export interface BuildChannelStateInputOptions {
   updates?: Update[];
   privKeyA?: Buffer;
   privKeyB?: Buffer;
+  // Blinds `balanceCommitment = Poseidon(outBalanceA, outBalanceB, blinding)`
+  // (see channel_state.circom's doc comment) — defaults to a fixed demo
+  // value so tests/scripts that need to independently recompute the
+  // expected commitment (e.g. contracts/test/ChannelStateProof.t.sol) can.
+  // A real prover would pick this randomly and remember it to withdraw later.
+  blinding?: bigint;
 }
 
 /// @param opts.channelId       bigint
@@ -97,5 +107,7 @@ export async function buildInput(opts: BuildChannelStateInputOptions) {
     sigB_S: sigB.map((s) => s.S),
     sigB_R8x: sigB.map((s) => s.R8x),
     sigB_R8y: sigB.map((s) => s.R8y),
+
+    blinding: (opts.blinding ?? DEFAULT_BLINDING).toString(),
   };
 }

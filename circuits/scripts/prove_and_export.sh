@@ -39,7 +39,7 @@ node "$BUILD_DIR/channel_state_js/generate_witness.js" \
   "$WORKDIR/witness.wtns" >&2
 
 npx --prefix "$CIRCUITS_DIR" snarkjs groth16 prove \
-  "$BUILD_DIR/channel_state_final_v2.zkey" \
+  "$BUILD_DIR/channel_state_final.zkey" \
   "$WORKDIR/witness.wtns" \
   "$WORKDIR/proof.json" \
   "$WORKDIR/public.json" >&2

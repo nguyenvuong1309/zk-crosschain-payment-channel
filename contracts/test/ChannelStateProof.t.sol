@@ -20,6 +20,19 @@ import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 ///         deployed `channel` at in THIS test run. Requires `circuits/`
 ///         dependencies installed and the circuit built — see circuits/README
 ///         or PLAN.md Milestone 2 for the one-time setup.
+///
+///         Public signal layout (see IChannelStateVerifier / PaymentChannel.sol):
+///           [0] outNonce  [1] balanceCommitment  [2] channelId
+///           [3] pubKeyAx  [4] pubKeyAy  [5] pubKeyBx  [6] pubKeyBy
+///           [7] initBalanceA  [8] initBalanceB  [9] contractAddress  [10] chainId
+///
+///         Since Milestone "privacy upgrade" (see channel_state.circom's doc
+///         comment), the proof no longer exposes the final balances
+///         directly — only `balanceCommitment = Poseidon(outBalanceA,
+///         outBalanceB, blinding)`. Tests that need the actual balances
+///         (e.g. to assert a payout) use the known demo values baked into
+///         circuits/input_gen/build_channel_state_input.ts's DEFAULT_UPDATES/
+///         DEFAULT_BLINDING and open via `withdrawWithOpening`.
 contract ChannelStateProofTest is Test {
     PaymentChannel channel;
     Groth16Verifier verifier;
@@ -27,16 +40,22 @@ contract ChannelStateProofTest is Test {
     address partyA = address(0xA11CE);
     address partyB = address(0xB0B);
 
-    // Must exactly match the EdDSA keys `build_channel_state_input.js`
+    // Must exactly match the EdDSA keys `build_channel_state_input.ts`
     // signs with by default (DEFAULT_PRIV_KEY_A/B) — recomputed here once,
-    // see circuits/input_gen/build_channel_state_input.js.
+    // see circuits/input_gen/build_channel_state_input.ts.
     uint256 constant PUBKEY_AX = 6258698228857579243937097735069405513777546488206385948349971781708128047847;
     uint256 constant PUBKEY_AY = 2216124967747932654884761600749314631961003421499958761754620989171020525870;
     uint256 constant PUBKEY_BX = 21036738825193802266623779881692904721121294284483365787352024792419651640674;
     uint256 constant PUBKEY_BY = 17088268747125489648041885901336523179405935374090472533134592214513880559267;
 
-    uint256 constant DEPOSIT_A = 1_000_000; // wei — must match build_channel_state_input.js's defaults
+    uint256 constant DEPOSIT_A = 1_000_000; // wei — must match build_channel_state_input.ts's defaults
     uint256 constant DEPOSIT_B = 1_000_000;
+
+    // Final state reached by DEFAULT_UPDATES in build_channel_state_input.ts.
+    uint256 constant FINAL_BALANCE_A = 400_000;
+    uint256 constant FINAL_BALANCE_B = 1_600_000;
+    // DEFAULT_BLINDING in build_channel_state_input.ts.
+    uint256 constant DEFAULT_BLINDING = 424242424242424242;
 
     function setUp() public {
         verifier = new Groth16Verifier();
@@ -104,7 +123,7 @@ contract ChannelStateProofTest is Test {
     ///      circuits/scripts/prove_and_export.sh (~5-10s).
     function _generateProof(uint256 channelId)
         internal
-        returns (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals)
+        returns (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals)
     {
         string[] memory cmd = new string[](5);
         cmd[0] = "bash";
@@ -125,42 +144,41 @@ contract ChannelStateProofTest is Test {
         a = [aArr[0], aArr[1]];
         b = [[b0Arr[0], b0Arr[1]], [b1Arr[0], b1Arr[1]]];
         c = [cArr[0], cArr[1]];
-        for (uint256 i = 0; i < 12; i++) {
+        for (uint256 i = 0; i < 11; i++) {
             pubSignals[i] = pubArr[i];
         }
     }
 
     function test_verifierAcceptsRealProof_boundToActualDeployedAddress() public {
         uint256 channelId = _openRealChannel();
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
             _generateProof(channelId);
 
         assertTrue(verifier.verifyProof(a, b, c, pubSignals));
         assertEq(
-            pubSignals[10], uint256(uint160(address(channel))), "proof's contractAddress must match actual deployment"
+            pubSignals[9], uint256(uint160(address(channel))), "proof's contractAddress must match actual deployment"
         );
-        assertEq(pubSignals[11], block.chainid, "proof's chainId must match actual chain");
+        assertEq(pubSignals[10], block.chainid, "proof's chainId must match actual chain");
     }
 
-    function test_closeWithProof_startsChallengePeriodWithDecodedState() public {
+    function test_closeWithProof_startsChallengePeriodWithCommitment() public {
         uint256 channelId = _openRealChannel();
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
             _generateProof(channelId);
 
         vm.prank(partyA);
         channel.closeWithProof(channelId, a, b, c, pubSignals);
 
-        (,,,, PaymentChannel.Status status, uint256 nonce, uint256 balA, uint256 balB,,,,,) =
-            channel.channels(channelId);
-        assertEq(uint256(status), uint256(PaymentChannel.Status.CHALLENGE_PERIOD));
-        assertEq(nonce, 6);
-        assertEq(balA, 400_000);
-        assertEq(balB, 1_600_000);
+        PaymentChannel.Channel memory ch = channel.getChannel(channelId);
+        assertEq(uint256(ch.status), uint256(PaymentChannel.Status.CHALLENGE_PERIOD));
+        assertEq(ch.nonce, 6);
+        assertTrue(ch.balancesCommitted, "closeWithProof must not reveal the balances directly");
+        assertEq(ch.balanceCommitment, pubSignals[1]);
     }
 
-    function test_closeWithProof_thenWithdrawAfterWindow_paysOutProvenBalances() public {
+    function test_closeWithProof_thenWithdrawWithOpening_paysOutProvenBalances() public {
         uint256 channelId = _openRealChannel();
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
             _generateProof(channelId);
 
         vm.prank(partyA);
@@ -168,22 +186,44 @@ contract ChannelStateProofTest is Test {
 
         vm.warp(block.timestamp + channel.CHALLENGE_PERIOD() + 1);
 
+        // Plain withdraw() must refuse — the balances are only committed to,
+        // not revealed, at this point.
+        vm.prank(partyB);
+        vm.expectRevert(PaymentChannel.BalancesNotYetRevealed.selector);
+        channel.withdraw(channelId);
+
         uint256 balABefore = partyA.balance;
         uint256 balBBefore = partyB.balance;
 
         vm.prank(partyB);
-        channel.withdraw(channelId);
+        channel.withdrawWithOpening(channelId, FINAL_BALANCE_A, FINAL_BALANCE_B, DEFAULT_BLINDING);
 
-        assertEq(partyA.balance, balABefore + 400_000);
-        assertEq(partyB.balance, balBBefore + 1_600_000);
+        assertEq(partyA.balance, balABefore + FINAL_BALANCE_A);
+        assertEq(partyB.balance, balBBefore + FINAL_BALANCE_B);
+    }
+
+    function test_withdrawWithOpening_revertsOnWrongOpening() public {
+        uint256 channelId = _openRealChannel();
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
+            _generateProof(channelId);
+
+        vm.prank(partyA);
+        channel.closeWithProof(channelId, a, b, c, pubSignals);
+        vm.warp(block.timestamp + channel.CHALLENGE_PERIOD() + 1);
+
+        vm.prank(partyB);
+        vm.expectRevert(PaymentChannel.CommitmentMismatch.selector);
+        // Right total, wrong split — conservation passes but the opening
+        // doesn't match the committed value, so this must still revert.
+        channel.withdrawWithOpening(channelId, FINAL_BALANCE_A + 1, FINAL_BALANCE_B - 1, DEFAULT_BLINDING);
     }
 
     function test_closeWithProof_revertsOnWrongChannelId() public {
         uint256 channelId = _openRealChannel();
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
             _generateProof(channelId);
 
-        pubSignals[3] = channelId + 999; // tamper with the channelId public signal
+        pubSignals[2] = channelId + 999; // tamper with the channelId public signal
 
         vm.prank(partyA);
         vm.expectRevert(PaymentChannel.ChannelIdMismatch.selector);
@@ -201,9 +241,9 @@ contract ChannelStateProofTest is Test {
         vm.prank(partyB);
         channel.join{value: DEPOSIT_B}(channelId, 0, 0, 0, 0, 0);
 
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
             _generateProof(channelId);
-        pubSignals[3] = channelId;
+        pubSignals[2] = channelId;
 
         vm.prank(partyA);
         vm.expectRevert(PaymentChannel.PublicKeyMismatch.selector);
@@ -212,10 +252,10 @@ contract ChannelStateProofTest is Test {
 
     function test_closeWithProof_revertsOnTamperedProof() public {
         uint256 channelId = _openRealChannel();
-        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[12] memory pubSignals) =
+        (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c, uint256[11] memory pubSignals) =
             _generateProof(channelId);
 
-        pubSignals[1] = 999_999; // claim a different outBalanceA without a matching proof
+        pubSignals[1] = 999_999; // claim a different balanceCommitment without a matching proof
 
         vm.prank(partyA);
         vm.expectRevert(PaymentChannel.InvalidProof.selector);
@@ -249,8 +289,8 @@ contract ChannelStateProofTest is Test {
         uint256[2] memory a = [aArr[0], aArr[1]];
         uint256[2][2] memory b = [[b0Arr[0], b0Arr[1]], [b1Arr[0], b1Arr[1]]];
         uint256[2] memory c = [cArr[0], cArr[1]];
-        uint256[12] memory pubSignals;
-        for (uint256 i = 0; i < 12; i++) {
+        uint256[11] memory pubSignals;
+        for (uint256 i = 0; i < 11; i++) {
             pubSignals[i] = pubArr[i];
         }
 

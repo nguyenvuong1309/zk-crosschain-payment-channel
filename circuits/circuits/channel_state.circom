@@ -23,14 +23,30 @@ include "circomlib/circuits/bitify.circom";
 /// identities together. See PLAN.md section 5 for the risk this implies.
 ///
 /// Public signals (in declaration order, see `component main`):
-///   channelId       - binds this proof to one specific on-chain channel
-///   pubKeyAx/Ay     - partyA's registered EdDSA public key
-///   pubKeyBx/By     - partyB's registered EdDSA public key
-///   initBalanceA/B  - starting balances (must equal the channel's deposits)
-///   contractAddress - the PaymentChannel deployment this proof is bound to
-///   chainId         - the chain that deployment lives on
-///   outNonce        - nonce of the final state reached by the chain
-///   outBalanceA/B   - balances of the final state reached by the chain
+///   channelId         - binds this proof to one specific on-chain channel
+///   pubKeyAx/Ay       - partyA's registered EdDSA public key
+///   pubKeyBx/By       - partyB's registered EdDSA public key
+///   initBalanceA/B    - starting balances (must equal the channel's deposits)
+///   contractAddress   - the PaymentChannel deployment this proof is bound to
+///   chainId           - the chain that deployment lives on
+///   outNonce          - nonce of the final state reached by the chain
+///   balanceCommitment - Poseidon(outBalanceA, outBalanceB, blinding) — see
+///                        below for why this replaces plain outBalanceA/B
+///
+/// **Privacy note (upgrade over the original design)**: the final balances
+/// are NOT public signals anymore. Only a Poseidon commitment to them is.
+/// This hides the settled split between the two parties from anyone merely
+/// watching the chain at close time — intermediate off-chain history was
+/// already private (that's the whole point of this circuit), but the old
+/// version still leaked the final numbers as plain public inputs, defeating
+/// that privacy at the last step. The contract accepts this commitment when
+/// closing the channel (status becomes CHALLENGE_PERIOD without knowing the
+/// split), and only requires it to be opened — `outBalanceA`, `outBalanceB`,
+/// `blinding` revealed and checked against the commitment on-chain — at
+/// `withdraw()` time, since real funds must be moved to real amounts then.
+/// That reveal is unavoidable for an on-chain settlement (see PLAN.md); what
+/// this buys is hiding the number for the `CHALLENGE_PERIOD` duration and
+/// removing it from `closeWithProof`/`challengeWithProof` calldata.
 ///
 /// `contractAddress`/`chainId` are a domain separator, mirroring
 /// PaymentChannel.sol's `hashState()` (see its doc comment for why): without
@@ -44,6 +60,13 @@ include "circomlib/circuits/bitify.circom";
 /// Private signals (witness, supplied by whichever party generates the proof):
 ///   nonce[steps], balanceA[steps], balanceB[steps]      - each update's state
 ///   sigA_{S,R8x,R8y}[steps], sigB_{S,R8x,R8y}[steps]    - both signatures
+///   blinding                                            - random scalar,
+///     chosen by the prover, that blinds `balanceCommitment` (without it, the
+///     commitment would be trivially brute-forceable since balances are
+///     small, bounded integers — Poseidon isn't hiding on its own for a
+///     low-entropy input). The prover must remember `blinding` to withdraw
+///     later; losing it means losing the ability to open the commitment (see
+///     PaymentChannel.sol's `withdrawWithOpening`).
 template ChannelStateTransition(steps) {
     // ---- public ----
     signal input channelId;
@@ -57,13 +80,13 @@ template ChannelStateTransition(steps) {
     signal input chainId;
 
     signal output outNonce;
-    signal output outBalanceA;
-    signal output outBalanceB;
+    signal output balanceCommitment;
 
     // ---- private witness: the off-chain update history ----
     signal input nonce[steps];
     signal input balanceA[steps];
     signal input balanceB[steps];
+    signal input blinding;
 
     signal input sigA_S[steps];
     signal input sigA_R8x[steps];
@@ -165,8 +188,17 @@ template ChannelStateTransition(steps) {
     }
 
     outNonce <== nonce[steps - 1];
-    outBalanceA <== balanceA[steps - 1];
-    outBalanceB <== balanceB[steps - 1];
+
+    // Commit to the final balances instead of exposing them as public
+    // signals — see the doc comment above. `blinding` is unconstrained here
+    // beyond being included in the hash; its only job is adding entropy the
+    // verifier can't guess, so 2 low-value balances don't make the
+    // commitment brute-forceable.
+    component finalBalanceCommitment = Poseidon(3);
+    finalBalanceCommitment.inputs[0] <== balanceA[steps - 1];
+    finalBalanceCommitment.inputs[1] <== balanceB[steps - 1];
+    finalBalanceCommitment.inputs[2] <== blinding;
+    balanceCommitment <== finalBalanceCommitment.out;
 }
 
 // Fixed to 4 off-chain updates per proof for this demo. A channel with more

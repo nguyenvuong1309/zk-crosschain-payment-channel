@@ -57,7 +57,8 @@ contract KeyOwnershipTest is Test {
         vm.prank(partyA);
         channel.open{value: 1 ether}(partyB, 1 ether, PUBKEY_AX, PUBKEY_AY, r8x, r8y, s);
 
-        (,,,,,,,,, uint256 pubKeyAx, uint256 pubKeyAy,,) = channel.channels(channelId);
+        PaymentChannel.Channel memory ch = channel.getChannel(channelId);
+        (uint256 pubKeyAx, uint256 pubKeyAy) = (ch.pubKeyAx, ch.pubKeyAy);
         assertEq(pubKeyAx, PUBKEY_AX);
         assertEq(pubKeyAy, PUBKEY_AY);
     }

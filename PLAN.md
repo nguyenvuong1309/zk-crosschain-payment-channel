@@ -566,9 +566,18 @@ zk-crosschain-payment-channel/
           minh trạng thái qua proof.
         - Cho phép 1 bên buộc tiến triển kênh dựa trên 1 chuỗi update cũ mà
           không cần đối tác hợp tác ký state mới (đối tác từ chối ký).
-        - Riêng tư off-chain history tốt hơn nếu mở rộng để không lộ balance
-          trung gian (hiện tại `outBalanceA/B` vẫn là public signal, nên
-          demo NÀY không có tính riêng tư — cần thiết kế thêm nếu muốn).
+        - ~~Riêng tư off-chain history tốt hơn nếu mở rộng để không lộ
+          balance trung gian~~ — **Đã làm (nâng cấp sau Milestone 5)**.
+          `outBalanceA/B` không còn là public signal — thay bằng
+          `balanceCommitment = Poseidon(outBalanceA, outBalanceB, blinding)`.
+          Mở commitment (bắt buộc để rút tiền thật) chỉ xảy ra ở
+          `withdrawWithOpening()`, verify bằng 1 contract Poseidon(3) riêng
+          (`contracts/src/PoseidonT4.sol`, bytecode sinh từ circomlibjs's
+          `poseidon_gencontract`, ~53K gas). **Giới hạn không tránh được**:
+          số dư vẫn lộ tại thời điểm rút — settlement thật phải chuyển đúng
+          số tiền on-chain. Giá trị thật: ẩn lịch sử trung gian VÀ ẩn số dư
+          trong suốt `CHALLENGE_PERIOD` (trước đây lộ ngay lúc
+          `closeWithProof`).
 - [ ] Lưu ý kỹ thuật cho bước tiếp: circuit cố định `steps = 4` — kênh có
       nhiều hơn 4 update off-chain phải nộp nhiều proof nối tiếp
       (`initBalance` của proof sau = `outBalance` của proof trước), hoặc

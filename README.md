@@ -13,7 +13,8 @@ cho giả định tin cậy và giới hạn của demo — đọc trước khi 
 | M1 | Payment channel 1 chain (raw signature) | ✅ Xong — `contracts/` |
 | M2 | ZK circuit + settle qua Groth16Verifier trên PaymentChannel, domain-separated (chống replay xuyên deployment) | ✅ Xong — `circuits/`, `contracts/src/Groth16Verifier.sol`. **Lưu ý**: ZK proof đắt hơn raw-signature close cho kênh 2 bên — xem PLAN.md M2 để hiểu giá trị thật của ZK ở đây không phải tiết kiệm gas. Test cần `forge test --ffi`. |
 | M3 | Cross-chain qua ZK light client (thu nhỏ) | ✅ Xong — `circuits/circuits/consensus_proof.circom`, `contracts/src/LightClientVerifier.sol`, `relayer/`. Đã chạy end-to-end thật trên 2 Anvil (`relayer/src/e2e_demo.ts`). |
-| M4 | Hoá cứng hướng production | 🔶 Phần lớn xong — xem bảng chi tiết bên dưới |
+| M4 | Hoá cứng hướng production | ✅ Xong — xem bảng chi tiết bên dưới (chỉ còn audit độc lập bên thứ 3, cần nguồn lực ngoài) |
+| M5 | Sync committee Ethereum thật, trustless bootstrap (mọi giả định tin cậy tự verify được) | ✅ Xong — xem chi tiết ngay dưới bảng M4 |
 
 **M4 — chi tiết**:
 
@@ -28,7 +29,7 @@ cho giả định tin cậy và giới hạn của demo — đọc trước khi 
 | BLS12-381 validator thật (khoá + aggregate signature + pairing check thật qua precompile EIP-2537) | ✅ Xong — `bls-validators/`, `contracts/src/LightClientVerifierBLS.sol` |
 | Relayer watch-loop tự động (không cần gọi tay sau mỗi update) | ✅ Xong — `relayer/src/watch.ts`, `pnpm run watch` |
 | Audit bảo mật độc lập bởi bên thứ 3 | ⏳ Cần nguồn lực ngoài, chưa làm |
-| Sync committee Ethereum thật (SSZ, beacon header) | 🔶 Đang làm — xem Milestone 5, `PLAN.md` |
+| Sync committee Ethereum thật (SSZ, beacon header) | ✅ Xong (Milestone 5) — xem chi tiết ngay dưới, `PLAN.md` |
 
 **Milestone 5 (✅ HOÀN THÀNH — mọi giả định tin cậy đều tự verify được)** —
 thay validator giả lập bằng sync committee Ethereum thật: đăng ký
@@ -43,9 +44,19 @@ beacon node độc lập thật**, chỉ tin khi ≥2/3 đồng ý (`bls-validat
 — không còn tin mù 1 node duy nhất. Không dùng thư viện light-client ngoài
 nào. Chi tiết đầy đủ: `PLAN.md` Milestone 5.
 
-65 test Foundry pass (`forge test`, cần `--ffi`), cộng thêm test hình thức
+67 test Foundry pass (`forge test`, cần `--ffi`), cộng thêm test hình thức
 Halmos (`contracts/test/PaymentChannel.formal.t.sol`) và test Rust cho
 circuit Halo2 (`circuits-halo2/`, `cargo test`).
+
+**Nâng cấp privacy (sau Milestone 5)**: `closeWithProof`/`challengeWithProof`
+không còn để lộ số dư cuối cùng làm public signal — `channel_state.circom`
+giờ output `balanceCommitment = Poseidon(outBalanceA, outBalanceB, blinding)`
+thay vì 2 số dư trần. Mở commitment (bắt buộc phải lộ để rút tiền thật) chỉ
+xảy ra ở `withdrawWithOpening()`, verify on-chain bằng 1 contract Poseidon(3)
+riêng (bytecode sinh từ `circomlibjs`, ~53K gas — xem `contracts/src/PoseidonT4.sol`).
+Giới hạn cố ý: số dư vẫn lộ tại thời điểm rút — không thể tránh khi settlement
+thật chuyển đúng số tiền on-chain; giá trị của nâng cấp là ẩn lịch sử trung
+gian và ẩn số dư trong suốt `CHALLENGE_PERIOD`.
 
 ## Cấu trúc
 

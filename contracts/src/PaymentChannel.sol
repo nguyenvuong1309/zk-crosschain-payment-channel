@@ -4,25 +4,30 @@ pragma solidity ^0.8.24;
 import {ECDSA} from "openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "openzeppelin-contracts/contracts/utils/cryptography/MessageHashUtils.sol";
 import {BabyJubJub} from "./BabyJubJub.sol";
+import {IPoseidonT4, PoseidonT4Deployer} from "./PoseidonT4.sol";
 
 /// @notice Interface of the snarkjs-generated Groth16 verifier for
 ///         circuits/circuits/channel_state.circom. Public signal layout
 ///         (circom always emits outputs first, then public inputs in
 ///         `component main {public [...]}` declaration order):
-///           [0]  outNonce         [6]  pubKeyBx
-///           [1]  outBalanceA      [7]  pubKeyBy
-///           [2]  outBalanceB      [8]  initBalanceA
-///           [3]  channelId        [9]  initBalanceB
-///           [4]  pubKeyAx         [10] contractAddress
-///           [5]  pubKeyAy         [11] chainId
+///           [0]  outNonce            [5]  pubKeyBx
+///           [1]  balanceCommitment   [6]  pubKeyBy
+///           [2]  channelId           [7]  initBalanceA
+///           [3]  pubKeyAx            [8]  initBalanceB
+///           [4]  pubKeyAy            [9]  contractAddress
+///                                    [10] chainId
 /// `contractAddress`/`chainId` are the domain separator baked into the
 /// signed message inside the circuit — see channel_state.circom.
+/// `balanceCommitment = Poseidon(outBalanceA, outBalanceB, blinding)` — the
+/// final balances are NOT revealed by this proof, only committed to (see
+/// channel_state.circom's doc comment, and `withdrawWithOpening` below for
+/// where they're eventually revealed).
 interface IChannelStateVerifier {
     function verifyProof(
         uint256[2] calldata _pA,
         uint256[2][2] calldata _pB,
         uint256[2] calldata _pC,
-        uint256[12] calldata _pubSignals
+        uint256[11] calldata _pubSignals
     ) external view returns (bool);
 }
 
@@ -107,6 +112,17 @@ contract PaymentChannel {
         uint256 pubKeyAy;
         uint256 pubKeyBx;
         uint256 pubKeyBy;
+        // Set by closeWithProof/challengeWithProof instead of balanceA/B
+        // (see IChannelStateVerifier's doc comment on balanceCommitment):
+        // the ZK-proof path never reveals the final split on-chain, only a
+        // Poseidon commitment to it. `balancesCommitted` gates withdraw() —
+        // true means balanceA/B below are stale and withdrawWithOpening()
+        // must be used instead, which checks the opening against this
+        // commitment before paying out. A later raw-signature close/challenge
+        // (closeCooperative/closeUnilateral/challenge) clears this flag,
+        // since those reveal balanceA/B directly.
+        uint256 balanceCommitment;
+        bool balancesCommitted;
     }
 
     uint256 public constant CHALLENGE_PERIOD = 1 days;
@@ -115,9 +131,24 @@ contract PaymentChannel {
     // address(0) means "no light client configured" — closeWithRemoteAttestation
     // is disabled, everything else is unaffected (see its own zero-address check).
     ILightClientVerifier public immutable lightClientVerifier;
+    // Deployed once in the constructor from PoseidonT4Bytecode (see
+    // PoseidonT4.sol) — used only to open a balanceCommitment at withdraw
+    // time, matching channel_state.circom's Poseidon(3).
+    IPoseidonT4 public immutable poseidonT4;
 
     uint256 public nextChannelId;
-    mapping(uint256 => Channel) public channels;
+    // Not `public`: with `balanceCommitment`/`balancesCommitted` added, the
+    // auto-generated flat-tuple getter for this struct trips solc's
+    // "stack too deep" limit even under via-ir (too many return values
+    // encoded at once). `getChannel` below returns the same data as a
+    // single struct value instead, which encodes fine.
+    mapping(uint256 => Channel) internal channels;
+
+    /// @notice Read a channel's full state. Replaces the auto-generated
+    ///         public-mapping getter (see `channels`' doc comment).
+    function getChannel(uint256 channelId) external view returns (Channel memory) {
+        return channels[channelId];
+    }
 
     /// @notice Funds that couldn't be pushed to their recipient during a
     ///         payout (e.g. recipient is a contract that reverts on
@@ -155,6 +186,8 @@ contract PaymentChannel {
     error InvalidKeyOwnershipProof();
     error LightClientNotConfigured();
     error UntrustedRemoteState();
+    error BalancesNotYetRevealed();
+    error CommitmentMismatch();
 
     modifier onlyParty(uint256 channelId) {
         Channel storage ch = channels[channelId];
@@ -165,6 +198,11 @@ contract PaymentChannel {
     constructor(IChannelStateVerifier _channelStateVerifier, ILightClientVerifier _lightClientVerifier) {
         channelStateVerifier = _channelStateVerifier;
         lightClientVerifier = _lightClientVerifier;
+        // Deployed fresh per PaymentChannel instance rather than passed in:
+        // the bytecode is fixed/parameterless (see PoseidonT4.sol), so
+        // there's nothing a caller could usefully configure, and this keeps
+        // deployment scripts/tests to a single `new PaymentChannel(...)`.
+        poseidonT4 = IPoseidonT4(new PoseidonT4Deployer().deploy());
     }
 
     /// @notice Open a new channel. Caller is partyA and must send depositA as msg.value
@@ -258,6 +296,7 @@ contract PaymentChannel {
         ch.balanceA = state.balanceA;
         ch.balanceB = state.balanceB;
         ch.nonce = state.nonce;
+        ch.balancesCommitted = false;
         ch.status = Status.CLOSED;
 
         _payout(ch);
@@ -280,6 +319,7 @@ contract PaymentChannel {
         ch.balanceA = state.balanceA;
         ch.balanceB = state.balanceB;
         ch.nonce = state.nonce;
+        ch.balancesCommitted = false;
         ch.status = Status.CHALLENGE_PERIOD;
         ch.challengeExpiry = block.timestamp + CHALLENGE_PERIOD;
 
@@ -308,6 +348,7 @@ contract PaymentChannel {
         ch.balanceA = state.balanceA;
         ch.balanceB = state.balanceB;
         ch.nonce = state.nonce;
+        ch.balancesCommitted = false;
         // extend the window so the other party has a fair chance to re-challenge
         ch.challengeExpiry = block.timestamp + CHALLENGE_PERIOD;
 
@@ -326,17 +367,16 @@ contract PaymentChannel {
         uint256[2] calldata a,
         uint256[2][2] calldata b,
         uint256[2] calldata c,
-        uint256[12] calldata pubSignals
+        uint256[11] calldata pubSignals
     ) external onlyParty(channelId) {
         Channel storage ch = channels[channelId];
         if (ch.status != Status.ACTIVE) revert WrongStatus(Status.ACTIVE, ch.status);
 
-        (uint256 outNonce, uint256 outBalanceA, uint256 outBalanceB) =
-            _verifyChannelProof(ch, channelId, a, b, c, pubSignals);
+        (uint256 outNonce, uint256 balanceCommitment) = _verifyChannelProof(ch, channelId, a, b, c, pubSignals);
         if (outNonce < ch.nonce) revert StaleNonce();
 
-        ch.balanceA = outBalanceA;
-        ch.balanceB = outBalanceB;
+        ch.balanceCommitment = balanceCommitment;
+        ch.balancesCommitted = true;
         ch.nonce = outNonce;
         ch.status = Status.CHALLENGE_PERIOD;
         ch.challengeExpiry = block.timestamp + CHALLENGE_PERIOD;
@@ -354,18 +394,17 @@ contract PaymentChannel {
         uint256[2] calldata a,
         uint256[2][2] calldata b,
         uint256[2] calldata c,
-        uint256[12] calldata pubSignals
+        uint256[11] calldata pubSignals
     ) external {
         Channel storage ch = channels[channelId];
         if (ch.status != Status.CHALLENGE_PERIOD) revert WrongStatus(Status.CHALLENGE_PERIOD, ch.status);
         if (block.timestamp >= ch.challengeExpiry) revert ChallengeWindowClosed();
 
-        (uint256 outNonce, uint256 outBalanceA, uint256 outBalanceB) =
-            _verifyChannelProof(ch, channelId, a, b, c, pubSignals);
+        (uint256 outNonce, uint256 balanceCommitment) = _verifyChannelProof(ch, channelId, a, b, c, pubSignals);
         if (outNonce <= ch.nonce) revert StaleNonce();
 
-        ch.balanceA = outBalanceA;
-        ch.balanceB = outBalanceB;
+        ch.balanceCommitment = balanceCommitment;
+        ch.balancesCommitted = true;
         ch.nonce = outNonce;
         // extend the window so the other party has a fair chance to re-challenge
         ch.challengeExpiry = block.timestamp + CHALLENGE_PERIOD;
@@ -414,6 +453,7 @@ contract PaymentChannel {
         ch.balanceA = state.balanceA;
         ch.balanceB = state.balanceB;
         ch.nonce = state.nonce;
+        ch.balancesCommitted = false;
         ch.status = Status.CHALLENGE_PERIOD;
         ch.challengeExpiry = block.timestamp + CHALLENGE_PERIOD;
 
@@ -421,15 +461,58 @@ contract PaymentChannel {
     }
 
     /// @notice After the challenge window expires undisputed, settle funds.
+    /// @dev Reverts if the channel closed via `closeWithProof`/
+    ///      `challengeWithProof` and was never subsequently overridden by a
+    ///      raw-signature close/challenge — those only leave a
+    ///      `balanceCommitment` on-chain (see Channel.balancesCommitted),
+    ///      not the actual split. Use `withdrawWithOpening` in that case.
     function withdraw(uint256 channelId) external onlyParty(channelId) {
         Channel storage ch = channels[channelId];
         if (ch.status != Status.CHALLENGE_PERIOD) revert WrongStatus(Status.CHALLENGE_PERIOD, ch.status);
         if (block.timestamp < ch.challengeExpiry) revert ChallengeWindowOpen();
+        if (ch.balancesCommitted) revert BalancesNotYetRevealed();
 
         ch.status = Status.CLOSED;
         _payout(ch);
 
         emit ChannelWithdrawn(channelId, ch.balanceA, ch.balanceB);
+    }
+
+    /// @notice Settles a channel that closed via `closeWithProof`/
+    ///         `challengeWithProof` (see `balanceCommitment`/`balancesCommitted`
+    ///         on `Channel`, and channel_state.circom's doc comment on why the
+    ///         final split isn't revealed until now). The caller must supply
+    ///         the exact `(balanceA, balanceB, blinding)` the proof committed
+    ///         to; anyone who lost `blinding` cannot open the commitment and
+    ///         the channel's funds become unwithdrawable — the same failure
+    ///         mode as losing a private key, not a new one introduced here
+    ///         (both parties independently know these values off-chain, same
+    ///         as they'd know a raw-signature state).
+    /// @dev `balanceA + balanceB == depositA + depositB` is re-checked here
+    ///      even though channel_state.circom already enforces conservation
+    ///      internally — defense in depth against a verifier-contract bug,
+    ///      matching the pattern `_checkConservation` uses on the
+    ///      raw-signature paths.
+    function withdrawWithOpening(uint256 channelId, uint256 balanceA, uint256 balanceB, uint256 blinding)
+        external
+        onlyParty(channelId)
+    {
+        Channel storage ch = channels[channelId];
+        if (ch.status != Status.CHALLENGE_PERIOD) revert WrongStatus(Status.CHALLENGE_PERIOD, ch.status);
+        if (block.timestamp < ch.challengeExpiry) revert ChallengeWindowOpen();
+        if (!ch.balancesCommitted) revert BalancesNotYetRevealed();
+        if (balanceA + balanceB != ch.depositA + ch.depositB) revert DepositMismatch();
+
+        uint256[3] memory opening = [balanceA, balanceB, blinding];
+        if (poseidonT4.poseidon(opening) != ch.balanceCommitment) revert CommitmentMismatch();
+
+        ch.balanceA = balanceA;
+        ch.balanceB = balanceB;
+        ch.balancesCommitted = false;
+        ch.status = Status.CLOSED;
+        _payout(ch);
+
+        emit ChannelWithdrawn(channelId, balanceA, balanceB);
     }
 
     // ---------------------------------------------------------------------
@@ -525,23 +608,22 @@ contract PaymentChannel {
         uint256[2] calldata a,
         uint256[2][2] calldata b,
         uint256[2] calldata c,
-        uint256[12] calldata pubSignals
-    ) internal view returns (uint256 outNonce, uint256 outBalanceA, uint256 outBalanceB) {
-        if (pubSignals[3] != channelId) revert ChannelIdMismatch();
-        if (pubSignals[4] != ch.pubKeyAx || pubSignals[5] != ch.pubKeyAy) revert PublicKeyMismatch();
-        if (pubSignals[6] != ch.pubKeyBx || pubSignals[7] != ch.pubKeyBy) revert PublicKeyMismatch();
+        uint256[11] calldata pubSignals
+    ) internal view returns (uint256 outNonce, uint256 balanceCommitment) {
+        if (pubSignals[2] != channelId) revert ChannelIdMismatch();
+        if (pubSignals[3] != ch.pubKeyAx || pubSignals[4] != ch.pubKeyAy) revert PublicKeyMismatch();
+        if (pubSignals[5] != ch.pubKeyBx || pubSignals[6] != ch.pubKeyBy) revert PublicKeyMismatch();
         // The proof always starts its chain from the channel's on-chain
         // deposits (see PLAN.md Milestone 2 note on chaining proofs across
         // more than `steps` off-chain updates — not implemented here).
-        if (pubSignals[8] != ch.depositA || pubSignals[9] != ch.depositB) revert InitialBalanceMismatch();
-        if (pubSignals[10] != uint256(uint160(address(this)))) revert DomainMismatch();
-        if (pubSignals[11] != block.chainid) revert DomainMismatch();
+        if (pubSignals[7] != ch.depositA || pubSignals[8] != ch.depositB) revert InitialBalanceMismatch();
+        if (pubSignals[9] != uint256(uint160(address(this)))) revert DomainMismatch();
+        if (pubSignals[10] != block.chainid) revert DomainMismatch();
 
         if (!channelStateVerifier.verifyProof(a, b, c, pubSignals)) revert InvalidProof();
 
         outNonce = pubSignals[0];
-        outBalanceA = pubSignals[1];
-        outBalanceB = pubSignals[2];
+        balanceCommitment = pubSignals[1];
     }
 
     /// @dev Pays out both parties. Deliberately does NOT let one party's
