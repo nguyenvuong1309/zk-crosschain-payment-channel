@@ -58,6 +58,20 @@ Giới hạn cố ý: số dư vẫn lộ tại thời điểm rút — không t
 thật chuyển đúng số tiền on-chain; giá trị của nâng cấp là ẩn lịch sử trung
 gian và ẩn số dư trong suốt `CHALLENGE_PERIOD`.
 
+**Watchtower staking/slashing (`contracts/src/WatchtowerRegistry.sol`)**:
+watchtower giờ có thể "để tiền vào cửa" — `stake()` khoá ETH cho 1 channel cụ
+thể, `commitCheckpoint()` ghi on-chain `(nonce, hash)` mỗi lần nhận update
+off-chain mới (tốn 1 tx L1 riêng cho watchtower — cái giá để biến "watchtower
+biết state mới hơn nhưng không hành động" thành chứng minh được on-chain).
+Nếu channel đóng CLOSED ở nonce THẤP HƠN nonce watchtower đã cam kết, bất kỳ
+ai cũng permissionless gọi `slash()` — 10% stake thưởng người gọi, phần còn
+lại chia đều cho 2 party bị hại. `unstake()` bị khoá `UNSTAKE_COOLDOWN` (1
+ngày) sau khi channel CLOSED để `slash()` luôn có quyền ưu tiên. 12/12 test
+pass (`test/WatchtowerRegistry.t.sol`). Giới hạn ghi rõ: chỉ phạt được nếu
+watchtower TỰ cam kết on-chain rồi không hành động — 1 watchtower không bao
+giờ commit gì thì không thể bị slash bằng cơ chế này (nhưng cũng không có
+lịch sử cam kết nào để chứng minh uy tín — tự nó là tín hiệu).
+
 ## Cấu trúc
 
 ```
