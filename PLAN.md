@@ -199,9 +199,12 @@
       định dạng nhị phân của 1 thành phần trusted-setup có thể sinh SRS
       sai âm thầm, rủi ro hơn giữ nguyên SRS cục bộ đã dán nhãn rõ "không an
       toàn". Chi tiết: `circuits-halo2/README.md`.
-      **Vẫn chưa đạt full parity**: chỉ 1/4 bước, chưa có range-check
-      overflow, chưa có Solidity verifier cho KZG, SRS vẫn cục bộ không an
-      toàn. Không dùng để thay `channel_state.circom` hiện tại.
+      **Vẫn chưa đạt full parity**: steps 1→4 và range-check overflow đã
+      đóng (vòng cập nhật sau, xem `circuits-halo2/README.md`), nhưng vẫn
+      chưa có Solidity verifier cho KZG, SRS vẫn cục bộ không an toàn, và
+      chưa có nâng cấp privacy-commitment (balance vẫn là public signal
+      trần, không phải Poseidon(3) commitment như production). Không dùng
+      để thay `channel_state.circom` hiện tại.
 - [x] ~~Formal verification cho `PaymentChannel.sol`~~ — **Đã làm 1 phần
       (Halmos), Certora chưa làm.** `test/PaymentChannel.formal.t.sol`, 4
       property symbolic đã chứng minh (không phải test ví dụ cụ thể — Halmos
